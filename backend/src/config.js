@@ -5,6 +5,8 @@ export const config = {
   mcpKey: process.env.LINGXING_MCP_KEY || '',
   adminKey: process.env.ADMIN_API_KEY || '',
   partnerKey: process.env.PARTNER_API_KEY || '',
+  partnerPassword: process.env.PARTNER_PASSWORD || '',
+  sessionDays: Number(process.env.PARTNER_SESSION_DAYS || 7),
   dbPath: process.env.DB_PATH || './data/dashboard.sqlite',
   cron: process.env.SYNC_CRON || '30 3 * * *',
   timezone: process.env.SYNC_TIMEZONE || 'America/Los_Angeles',
@@ -17,6 +19,6 @@ export function assertConfig() {
   const missing = [];
   if (!config.mcpKey) missing.push('LINGXING_MCP_KEY');
   if (!config.adminKey) missing.push('ADMIN_API_KEY');
-  if (!config.partnerKey) missing.push('PARTNER_API_KEY');
+  if (!config.partnerPassword && !config.partnerKey) missing.push('PARTNER_PASSWORD (or legacy PARTNER_API_KEY)');
   if (missing.length) throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
 }

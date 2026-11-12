@@ -1,84 +1,60 @@
-# Keychron Amazon US Partner Dashboard — LingXing MCP connector
+# Market Sales Dashboard — V3
 
-Updated against the uploaded WorkBuddy Stage-2 read-only test report (2026-11-12). This is a deployable backend starter, **not yet connected to the user's live ERP account**: the MCP key and hosting credentials must be supplied by the account owner.
+A same-origin React dashboard served by the existing Express service, connected to the LingXing MCP integration. The dashboard defaults to English and supports Chinese. Partner authentication uses a password exchange for a server-side, HttpOnly session cookie; no partner bearer key is embedded in the browser bundle.
 
-## Verified business scope
-- Brand ID: `304` (Keychron; from the LingXing brand dictionary)
-- Marketplace: Amazon US, `mids=1`
-- Shop IDs: `2177`, `2178`, `2179`, `7178`
-- Time zone: `America/Los_Angeles`
-- Sales tool: `statistics_sales_analysis_list` (not `query_product_performance_asin_lists`)
-- Listing tool: `erp_listing`
-- Inventory tool: `get_fba_stock_list`
-- Gateway protocol: MCP `help` → `search` → `action`
+## Existing Railway service upgrade
 
-## Important implementation rules
-1. Sales are queried per shop (Top 50 per shop) for the last complete 7-day and 30-day windows. This prevents the largest shop from hiding smaller shops.
-2. `date1.volume` is the selected period; `date2.volume` is the previous equal-length period. Values are parsed from comma-separated strings.
-3. `erp_listing` uses `bid=304` and a multi-shop `sids` string. Do not combine brand-name keyword search with `bid`; the report found inconsistent totals. The `7178` single-SID Listing filter was observed to fail, so results are re-filtered by returned `sid`/`store_id`.
-4. Listing is requested only for the SKU set present in the sales Top-N results, not all 8,274 records.
-5. Inventory `sku` maps to Listing `local_sku`; inventory `seller_sku` maps to Listing `msku`. ASIN is the cross-table bridge.
-6. Amazon `amzn.gr.*` ghost seller-SKU rows are grouped into the same local-SKU/ASIN inventory bucket. Rows with a stable `unique_id` are deduplicated before summing available stock.
-7. Missing inventory matches remain `availableStock: null` / `status: unknown`; they are not falsely treated as zero-stock.
-8. Partner API returns an explicit allowlist only. Never return raw MCP payloads, costs, profit, advertising spend, supplier data, or credentials.
-9. Ranking is Keychron's internal US sales ranking calculated from the four connected shops. It is **not** Amazon Best Sellers Rank.
+This is an in-place code upgrade for the existing `market-sales-dashboard-api` service. Keep the existing Railway project, domain, Volume mounted at `/app/data`, `LINGXING_MCP_KEY`, `ADMIN_API_KEY`, and `DB_PATH=/app/data/dashboard.sqlite`.
 
-## 1. Configure
+### Required Railway variable
+
+Add `PARTNER_PASSWORD` with a strong password that you will share with authorised Australian agents through a secure channel. Do not commit it to GitHub or put it in frontend code.
+
+`PARTNER_API_KEY` is no longer required for browser partner login. It may remain configured for backwards-compatible server-to-server access during migration, but the new frontend never uses it.
+
+Recommended existing values:
+- `LINGXING_MCP_URL=https://openmcp.lingxing.com/mcp-servers/lingxing-mcp`
+- `SYNC_CRON=30 3 * * *`
+- `SYNC_TIMEZONE=America/Los_Angeles`
+- `DB_PATH=/app/data/dashboard.sqlite`
+
+## Deploy
+
+1. Replace repository files with this V3 project, keeping the root `Dockerfile` and `railway.json`.
+2. In Railway Variables, add `PARTNER_PASSWORD` before deploying.
+3. Deploy the existing service. No new Railway project or Volume is required.
+4. Visit the existing Railway domain. The login page should load.
+5. Sign in with `PARTNER_PASSWORD`.
+6. Verify `/health` returns `{ "ok": true }` and the dashboard loads the latest snapshot.
+
+The login endpoint is `POST /api/auth/login`; it sets a `Secure`, `HttpOnly`, `SameSite=Lax` cookie. Logout revokes the server-side session. Session records are stored in SQLite and expire after `PARTNER_SESSION_DAYS` (default 7). Login attempts are rate-limited in-process. For a multi-replica deployment, replace the in-memory rate limiter with a shared store.
+
+## Admin endpoints
+
+Admin operations remain protected by `Authorization: Bearer $ADMIN_API_KEY`:
+- `GET /api/admin/mcp-tools`
+- `POST /api/admin/sync`
+
+Partner browser endpoints use the session cookie:
+- `GET /api/auth/me`
+- `POST /api/auth/logout`
+- `GET /api/partner/dashboard`
+- `GET /api/partner/status`
+
+The dashboard endpoint applies an explicit public-field allowlist. Raw MCP responses, cost, profit, advertising spend, supplier and purchase data are not returned.
+
+## Data semantics
+
+- Brand ID `304`, Amazon US marketplace ID `1`, shops `2177`, `2178`, `2179`, `7178`.
+- Sales are queried independently per shop for completed 7-day and 30-day windows; previous equal-length periods are compared.
+- Inventory is bridged through ASIN and local SKU mapping. Missing stock stays `null` / `unknown`, not zero.
+- Ranking is Keychron's internal Amazon US sales ranking, not Amazon Best Sellers Rank.
+- Inventory is US FBA available stock, not Australian available-to-promise stock.
+
+## Tests
+
 ```bash
-cp backend/.env.example backend/.env
-```
-Set `LINGXING_MCP_KEY`, `ADMIN_API_KEY`, and `PARTNER_API_KEY` in `backend/.env` or the host's secret manager. Do not send the MCP key in chat, commit `.env`, or place it in React/Vite variables.
-
-The four shop IDs, brand ID, and marketplace ID are prefilled from the read-only report and revalidated at sync time against `get_my_sids`.
-
-## 2. Deploy to Railway (recommended beginner path)
-
-1. Create a private GitHub repository and upload the contents of this project folder (the `Dockerfile` and `railway.json` must be at repository root). Do not upload `.env`; `.gitignore` and `.dockerignore` exclude it.
-2. In Railway, create a project with **New Project → GitHub Repo**, then select this repository. Railway detects the root `Dockerfile`.
-3. In the service Variables tab, add the variables from `backend/.env.example`. Set `DB_PATH=/app/data/dashboard.sqlite`. Generate long random values for `ADMIN_API_KEY` and `PARTNER_API_KEY`; never reuse the LingXing key.
-4. Add a Railway Volume and mount it at `/app/data` so SQLite snapshots survive redeploys.
-5. In Networking, generate a domain. Confirm `/health` returns `{"ok":true}`.
-6. Trigger the first sync using the admin endpoint from a private terminal; do not put the admin key in a browser URL.
-
-Railway setup references: [Quick Start](https://docs.railway.com/quick-start), [Variables](https://docs.railway.com/variables), [Volumes](https://docs.railway.com/volumes).
-
-**Important frontend security note:** do not put `PARTNER_API_KEY` in the public React bundle or Vite `VITE_*` variables. The current bearer-token partner endpoint is suitable for server-to-server testing only. Before sharing the current static dashboard with external agents, add a same-origin backend proxy or a proper partner login/session layer.
-
-## 3. Run locally
-Requirements: Docker + Docker Compose, or Node.js 22+.
-```bash
-docker compose up -d --build
-```
-Health check:
-```bash
-curl http://localhost:8080/health
+cd backend && npm test
 ```
 
-## 4. Trigger first sync
-```bash
-curl -X POST -H "Authorization: Bearer YOUR_ADMIN_API_KEY" http://localhost:8080/api/admin/sync
-```
-The first run discovers the three MCP gateway wrappers, obtains each business tool schema, then calls read-only actions. The MCP gateway uses the verified `help` → `search` → `action` pattern and enforces a 1.1-second request gap.
-
-## 5. Read partner data
-```bash
-curl -H "Authorization: Bearer YOUR_PARTNER_API_KEY" http://localhost:8080/api/partner/dashboard
-```
-The partner API only returns product identity, image, category, 7/30-day units, previous-period units, rank, FBA available/reserved stock, days of cover, and warning status.
-
-## 6. Daily sync
-Default: 03:30 `America/Los_Angeles` daily. Sales windows exclude the current incomplete US day. SQLite snapshots persist in the Docker volume. A failed sync does not overwrite the last successful snapshot.
-
-## 7. Before external release
-- Deploy behind HTTPS on a host with persistent storage.
-- Set `PARTNER_ALLOWED_ORIGINS` to the exact partner portal origin.
-- Replace the prototype shared partner bearer token with authenticated sessions or short-lived, revocable invite links.
-- Do not expose `/api/admin/*` to partners.
-- Verify the first real snapshot's row counts, shop coverage, product joins, stock aggregation and date boundaries before sharing.
-- The report's 60-row Listing sample is not a full matching-rate test; the code queries Listings only for the SKU set in the per-shop Top-N sales results.
-
-## 8. Tests
-```bash
-cd backend
-node --test
-```
+The frontend is built with Vite and served by Express from the same origin. This avoids exposing `PARTNER_API_KEY` in a Vite bundle and avoids CORS for the dashboard.
