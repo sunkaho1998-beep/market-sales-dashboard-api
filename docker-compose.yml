@@ -1,0 +1,11 @@
+services:
+  dashboard-api:
+    build: .
+    restart: unless-stopped
+    env_file: backend/.env
+    ports:
+      - "8080:8080"
+    volumes:
+      - dashboard-data:/app/data
+volumes:
+  dashboard-data:
