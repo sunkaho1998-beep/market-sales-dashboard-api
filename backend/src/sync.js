@@ -1,137 +1,788 @@
+
 import crypto from 'node:crypto';
 import { config, assertConfig } from './config.js';
-import { executeBusinessTool, listOf, totalOf } from './mcp.js';
-import { pool, saveRunStart, finishRun, replaceRunData } from './db.js';
+import {
+  executeBusinessTool,
+  listOf,
+  totalOf,
+  parseResult
+} from './mcp.js';
+import {
+  saveRunStart,
+  finishRun,
+  replaceRunData
+} from './db.js';
 
-const n = value => Number(String(value ?? 0).replaceAll(',', '')) || 0;
-function dateAtTz(date = new Date()) {
-  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: config.timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
-  const get = type => parts.find(part => part.type === type).value;
+// ==========================================
+// V4 MULTI-MARKET SYNC ENGINE
+// US / USD + AU / AUD
+// ==========================================
+
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+const n = value =>
+  Number(String(value ?? 0).replaceAll(',', '')) || 0;
+
+function dateAtTz(timezone, date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date);
+
+  const get = type => parts.find(p => p.type === type).value;
+
   return `${get('year')}-${get('month')}-${get('day')}`;
 }
-function shift(day, delta) { const d = new Date(`${day}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + delta); return d.toISOString().slice(0, 10); }
 
-// Every page is checked against the server-reported total. A short/empty page
-// before the total is reached is treated as an incomplete sync, never success.
-export async function fetchAllPages(toolId, baseParams, pageSize, label) {
-  let offset = 0, expectedTotal = null, pageCount = 0;
-  const rows = [];
-  while (expectedTotal === null || offset < expectedTotal) {
-    const response = await executeBusinessTool(toolId, { ...baseParams, offset, length: pageSize });
-    const pageRows = listOf(response);
-    const reportedTotal = totalOf(response);
-    if (reportedTotal > 0) {
-      if (expectedTotal !== null && expectedTotal !== reportedTotal) {
-        throw new Error(`${label}: total changed during pagination (${expectedTotal} -> ${reportedTotal}); rerun required`);
-      }
-      expectedTotal = reportedTotal;
-    }
-    pageCount += 1;
-    rows.push(...pageRows);
-    if (pageCount > 1000) throw new Error(`${label}: exceeded 1000 pages`);
-    if (expectedTotal === null) {
-      if (pageRows.length < pageSize) break;
-    } else if (rows.length < expectedTotal && pageRows.length === 0) {
-      throw new Error(`${label}: empty page at offset ${offset}; received ${rows.length}/${expectedTotal}`);
-    }
-    if (pageRows.length === 0 || pageRows.length < pageSize) break;
-    offset += pageRows.length;
-  }
-  const total = expectedTotal ?? rows.length;
-  if (rows.length < total) throw new Error(`${label}: incomplete pagination; received ${rows.length}/${total} rows across ${pageCount} pages`);
-  return { rows, total, pages: pageCount, complete: rows.length >= total };
+function shift(day, delta) {
+  const d = new Date(`${day}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + delta);
+  return d.toISOString().slice(0, 10);
 }
 
-function salesParams(sid, start, end) {
-  // Parameters are restricted to fields confirmed in the user's LingXing MCP report.
-  return {
-    asin_type: 'seller_sku', date_type: '5', start_date: start, end_date: end,
-    sids: sid, mids: config.marketId, bid: config.brandId, stat_field: 'volume',
-    sort_field: 'volume', sort_type: 'desc', sort_date: 'date1',
-    delivery_methods: [], developers: [], turn_on_summary: '0',
-    currency_code: '', search_field: 'seller_sku', search_value: [], parent_asin: ''
-  };
+function todayAtShanghai() {
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).format(new Date());
 }
+
 function extractSellerSku(row) {
-  if (Array.isArray(row.seller_sku)) return row.seller_sku[0] ?? null;
+  if (Array.isArray(row.seller_sku)) {
+    return row.seller_sku[0] ?? null;
+  }
+
   return row.seller_sku ?? row.msku ?? null;
 }
-function salesRows(rows) {
-  return rows.map(row => ({ ...row, seller_sku: extractSellerSku(row), date1: { ...(row.date1 || {}), volume: n(row.date1?.volume) }, date2: { ...(row.date2 || {}), volume: n(row.date2?.volume) } }));
+
+function extractAsin(row) {
+  if (Array.isArray(row.asin)) {
+    return row.asin[0] ?? null;
+  }
+
+  return row.asin ?? null;
 }
 
-export async function runFullSync() {
-  assertConfig();
-  const runId = crypto.randomUUID();
-  await saveRunStart(runId);
-  const metrics = { scope: 'four-us-stores', brandId: config.brandId, marketId: config.marketId, shops: {}, startedAt: new Date().toISOString(), complete: false };
-  try {
-    const shopResponse = await executeBusinessTool('get_my_sids', {});
-    const shops = listOf(shopResponse);
-    const allow = new Set(config.shopIds.map(String));
-    const actual = shops.filter(shop => { const sid = String(shop.sid ?? shop.id); const isUS = shop.country_id != null ? String(shop.country_id) === '1' : String(shop.country_code || 'US').toUpperCase() === 'US'; return allow.has(sid) && isUS; });
-    const ids = actual.map(shop => String(shop.sid ?? shop.id));
-    const missing = [...allow].filter(id => !ids.includes(id));
-    if (ids.length !== 4 || missing.length) throw new Error(`Store verification incomplete. Verified: ${ids.join(',') || 'none'}; missing: ${missing.join(',') || 'none'}`);
+function normalizeSales(rows) {
+  return rows.map(row => ({
+    ...row,
+    seller_sku: extractSellerSku(row),
+    asin: extractAsin(row),
+    date1: {
+      ...(row.date1 || {}),
+      volume: n(row.date1?.volume)
+    },
+    date2: {
+      ...(row.date2 || {}),
+      volume: n(row.date2?.volume)
+    }
+  }));
+}
 
-    const today = dateAtTz();
-    const lastCompleteDay = shift(today, -1);
-    const windows = {
-      7: { current: [shift(lastCompleteDay, -6), lastCompleteDay], previous: [shift(lastCompleteDay, -13), shift(lastCompleteDay, -7)] },
-      30: { current: [shift(lastCompleteDay, -29), lastCompleteDay], previous: [shift(lastCompleteDay, -59), shift(lastCompleteDay, -30)] },
-      90: { current: [shift(lastCompleteDay, -89), lastCompleteDay], previous: [shift(lastCompleteDay, -179), shift(lastCompleteDay, -90)] }
-    };
-    const listings = new Map(), sales = [], stocks = new Map();
+// ==========================================
+// DATE WINDOWS
+// ==========================================
+
+function buildWindows(timezone) {
+  const today = dateAtTz(timezone);
+  const lastCompleteDay = shift(today, -1);
+
+  return {
+    7: {
+      current: [
+        shift(lastCompleteDay, -6),
+        lastCompleteDay
+      ],
+      previous: [
+        shift(lastCompleteDay, -13),
+        shift(lastCompleteDay, -7)
+      ]
+    },
+    30: {
+      current: [
+        shift(lastCompleteDay, -29),
+        lastCompleteDay
+      ],
+      previous: [
+        shift(lastCompleteDay, -59),
+        shift(lastCompleteDay, -30)
+      ]
+    },
+    90: {
+      current: [
+        shift(lastCompleteDay, -89),
+        lastCompleteDay
+      ],
+      previous: [
+        shift(lastCompleteDay, -179),
+        shift(lastCompleteDay, -90)
+      ]
+    }
+  };
+}
+
+// ==========================================
+// GENERIC PAGINATION
+// ==========================================
+
+export async function fetchAllPages(
+  toolId,
+  baseParams,
+  pageSize,
+  label
+) {
+  let offset = 0;
+  let expectedTotal = null;
+  let pageCount = 0;
+
+  const rows = [];
+
+  while (expectedTotal === null || offset < expectedTotal) {
+    const response = await executeBusinessTool(toolId, {
+      ...baseParams,
+      offset,
+      length: pageSize
+    });
+
+    const pageRows = listOf(response);
+    const reportedTotal = totalOf(response);
+
+    if (reportedTotal > 0) {
+      if (
+        expectedTotal !== null &&
+        expectedTotal !== reportedTotal
+      ) {
+        throw new Error(
+          `${label}: total changed during pagination ` +
+          `(${expectedTotal} -> ${reportedTotal})`
+        );
+      }
+
+      expectedTotal = reportedTotal;
+    }
+
+    pageCount++;
+
+    if (pageCount > 1000) {
+      throw new Error(`${label}: exceeded 1000 pages`);
+    }
+
+    rows.push(...pageRows);
+
+    if (expectedTotal === null) {
+      if (pageRows.length < pageSize) break;
+    } else if (
+      rows.length < expectedTotal &&
+      pageRows.length === 0
+    ) {
+      throw new Error(
+        `${label}: empty page at offset ${offset}; ` +
+        `received ${rows.length}/${expectedTotal}`
+      );
+    }
+
+    if (
+      pageRows.length === 0 ||
+      pageRows.length < pageSize
+    ) {
+      break;
+    }
+
+    offset += pageRows.length;
+  }
+
+  const total = expectedTotal ?? rows.length;
+
+  if (rows.length < total) {
+    throw new Error(
+      `${label}: incomplete pagination; ` +
+      `received ${rows.length}/${total}`
+    );
+  }
+
+  return {
+    rows,
+    total,
+    pages: pageCount,
+    complete: rows.length >= total
+  };
+}
+
+// ==========================================
+// VERIFY MARKET STORES
+// ==========================================
+
+async function verifyMarketStores(market) {
+  const response = await executeBusinessTool(
+    'customer_review_country_sellers',
+    {}
+  );
+
+  const p = parseResult(response);
+  const sellers = p?.data?.sellers;
+
+  if (!Array.isArray(sellers)) {
+    throw new Error(
+      `${market.code}: unable to read LingXing seller list`
+    );
+  }
+
+  const allowed = new Set(
+    market.shopIds.map(String)
+  );
+
+  const actual = sellers.filter(shop => {
+    const sid = String(shop.sid);
+    const countryId = String(shop.country_id);
+
+    return (
+      allowed.has(sid) &&
+      countryId === String(market.marketId)
+    );
+  });
+
+  const ids = actual.map(shop => String(shop.sid));
+
+  const missing = [...allowed].filter(
+    id => !ids.includes(id)
+  );
+
+  if (
+    ids.length !== allowed.size ||
+    missing.length > 0
+  ) {
+    throw new Error(
+      `${market.code} store verification incomplete. ` +
+      `Verified: ${ids.join(',') || 'none'}. ` +
+      `Missing: ${missing.join(',') || 'none'}`
+    );
+  }
+
+  return ids;
+}
+
+// ==========================================
+// SALES API
+// ==========================================
+
+function salesParams(market, sid, start, end) {
+  return {
+    asin_type: 'seller_sku',
+    date_type: '5',
+    start_date: start,
+    end_date: end,
+
+    today_date: todayAtShanghai(),
+
+    sids: String(sid),
+    mids: String(market.marketId),
+    bid: config.brandId,
+
+    stat_field: 'volume',
+    sort_field: 'volume',
+    sort_type: 'desc',
+    sort_date: 'date1',
+
+    delivery_methods: [],
+    developers: [],
+    principal_uids: '',
+
+    turn_on_summary: '0',
+    compare_this_time_yesterday: 0,
+
+    currency_code: '',
+    search_field: 'seller_sku',
+    search_value: [],
+    parent_asin: '',
+    gtag_ids: '',
+    cid: ''
+  };
+}
+
+function hasSalesPayload(response) {
+  const p = parseResult(response);
+
+  return (
+    Array.isArray(p?.data?.list) ||
+    Array.isArray(p?.list)
+  );
+}
+
+// The sales endpoint can return an asynchronous
+// require_id response before returning the list.
+
+async function fetchSalesPage(params, label) {
+  const attempts = 6;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const response = await executeBusinessTool(
+      'statistics_sales_analysis_list',
+      params
+    );
+
+    if (hasSalesPayload(response)) {
+      return response;
+    }
+
+    const p = parseResult(response);
+
+    if (
+      response.isError ||
+      p?.success === false ||
+      Number(p?.code) === 102
+    ) {
+      throw new Error(
+        `${label}: sales API error: ${JSON.stringify(p)}`
+      );
+    }
+
+    if (attempt < attempts) {
+      await wait(3000);
+    }
+  }
+
+  throw new Error(
+    `${label}: sales list unavailable after 6 attempts.`
+  );
+}
+
+async function fetchAllSalesPages(
+  market,
+  sid,
+  start,
+  end,
+  pageSize,
+  label
+) {
+  let offset = 0;
+  let expectedTotal = null;
+  let pageCount = 0;
+
+  const rows = [];
+
+  while (expectedTotal === null || offset < expectedTotal) {
+    const params = salesParams(
+      market,
+      sid,
+      start,
+      end
+    );
+
+    params.offset = offset;
+    params.length = pageSize;
+
+    const response = await fetchSalesPage(
+      params,
+      `${label} offset ${offset}`
+    );
+
+    const pageRows = listOf(response);
+    const reportedTotal = totalOf(response);
+
+    if (reportedTotal > 0) {
+      if (
+        expectedTotal !== null &&
+        expectedTotal !== reportedTotal
+      ) {
+        throw new Error(
+          `${label}: sales total changed during pagination`
+        );
+      }
+
+      expectedTotal = reportedTotal;
+    }
+
+    pageCount++;
+
+    if (pageCount > 1000) {
+      throw new Error(`${label}: exceeded 1000 pages`);
+    }
+
+    rows.push(...pageRows);
+
+    if (expectedTotal === null) {
+      if (pageRows.length < pageSize) break;
+    } else if (
+      rows.length < expectedTotal &&
+      pageRows.length === 0
+    ) {
+      throw new Error(
+        `${label}: incomplete sales pagination`
+      );
+    }
+
+    if (
+      pageRows.length === 0 ||
+      pageRows.length < pageSize
+    ) {
+      break;
+    }
+
+    offset += pageRows.length;
+  }
+
+  const total = expectedTotal ?? rows.length;
+
+  if (rows.length < total) {
+    throw new Error(
+      `${label}: received ${rows.length}/${total} sales rows`
+    );
+  }
+
+  return {
+    rows,
+    total,
+    pages: pageCount,
+    complete: rows.length >= total
+  };
+}
+
+// ==========================================
+// INVENTORY PAGE SIZE
+// ==========================================
+
+function getStockPageSize() {
+  const allowed = [20, 50, 100, 200, 500, 1000];
+  const requested = Number(config.stockPageSize);
+
+  return allowed.includes(requested)
+    ? requested
+    : 200;
+}
+
+// ==========================================
+// RUN ONE MARKET
+// ==========================================
+
+async function runMarketSync(market) {
+  const runId = crypto.randomUUID();
+
+  const metrics = {
+    scope: `market-${market.code}`,
+    marketCode: market.code,
+    currencyCode: market.currency,
+    marketId: market.marketId,
+    timezone: market.timezone,
+    brandId: config.brandId,
+    shops: {},
+    startedAt: new Date().toISOString(),
+    complete: false
+  };
+
+  let runStarted = false;
+
+  try {
+    // Keep startup inside try so one market's
+    // database failure does not abort the other market.
+
+    await saveRunStart(
+      runId,
+      market.code,
+      market.currency
+    );
+
+    runStarted = true;
+
+    console.log(
+      `[V4] Starting ${market.code} synchronization`
+    );
+
+    const ids = await verifyMarketStores(market);
+    const windows = buildWindows(market.timezone);
+
+    const listings = new Map();
+    const sales = [];
+    const stocks = new Map();
 
     for (const sid of ids) {
-      const listing = await fetchAllPages('erp_listing', {
-pvi_ids: '',
-sids: sid,
-search_field: 'msku',
-exact_search: '0'
-      }, Math.min(config.listingPageSize, 200), `Listing SID ${sid}`);
-      if (!listing.rows.length) throw new Error(`Listing returned zero rows for SID ${sid}; refusing to replace catalog`);
+      console.log(
+        `[V4] ${market.code}: processing SID ${sid}`
+      );
+
+      // --------------------------------------
+      // LISTING
+      // Uses the confirmed listing parameters.
+      // --------------------------------------
+
+      const listing = await fetchAllPages(
+        'erp_listing',
+        {
+          pvi_ids: '',
+          sids: sid,
+          search_field: 'msku',
+          exact_search: '0'
+        },
+        Math.min(config.listingPageSize, 200),
+        `Listing ${market.code} SID ${sid}`
+      );
+
+      if (!listing.rows.length) {
+        throw new Error(
+          `Listing returned zero rows for ${market.code} SID ${sid}`
+        );
+      }
+
       listings.set(sid, listing.rows);
-      metrics.shops[sid] = { listingRows: listing.rows.length, listingReportedTotal: listing.total, listingPages: listing.pages, listingComplete: listing.complete };
+
+      metrics.shops[sid] = {
+        listingRows: listing.rows.length,
+        listingReportedTotal: listing.total,
+        listingPages: listing.pages,
+        listingComplete: listing.complete
+      };
+
+      // --------------------------------------
+      // SALES: 7 / 30 / 90 DAYS
+      // --------------------------------------
 
       for (const period of [7, 30, 90]) {
         const range = windows[period];
-        const current = await fetchAllPages('statistics_sales_analysis_list', salesParams(sid, ...range.current), config.salesPageSize, `Sales ${period}D current SID ${sid}`);
-        const previous = await fetchAllPages('statistics_sales_analysis_list', salesParams(sid, ...range.previous), config.salesPageSize, `Sales ${period}D previous SID ${sid}`);
-        const previousByKey = new Map(previous.rows.map(row => [`${extractSellerSku(row) || ''}|${row.asin || ''}`, n(row.date1?.volume)]));
-        const normalized = salesRows(current.rows).map(row => ({ ...row, _previous_units: previousByKey.get(`${row.seller_sku || ''}|${row.asin || ''}`) ?? n(row.date2?.volume) }));
-        sales.push([sid, period, normalized]);
-        metrics.shops[sid][`sales${period}Rows`] = current.rows.length;
-        metrics.shops[sid][`sales${period}Pages`] = current.pages;
-        metrics.shops[sid][`sales${period}PreviousRows`] = previous.rows.length;
+
+        const current = await fetchAllSalesPages(
+          market,
+          sid,
+          ...range.current,
+          config.salesPageSize,
+          `Sales ${market.code} ${period}D current SID ${sid}`
+        );
+
+        const previous = await fetchAllSalesPages(
+          market,
+          sid,
+          ...range.previous,
+          config.salesPageSize,
+          `Sales ${market.code} ${period}D previous SID ${sid}`
+        );
+
+        const previousByKey = new Map(
+          previous.rows.map(row => [
+            `${extractSellerSku(row) || ''}|${extractAsin(row) || ''}`,
+            n(row.date1?.volume)
+          ])
+        );
+
+        const normalized = normalizeSales(
+          current.rows
+        ).map(row => ({
+          ...row,
+          _previous_units:
+            previousByKey.get(
+              `${row.seller_sku || ''}|${row.asin || ''}`
+            ) ?? n(row.date2?.volume)
+        }));
+
+        sales.push([
+          sid,
+          period,
+          normalized
+        ]);
+
+        metrics.shops[sid][`sales${period}Rows`] =
+          current.rows.length;
+
+        metrics.shops[sid][`sales${period}Pages`] =
+          current.pages;
+
+        metrics.shops[sid][`sales${period}PreviousRows`] =
+          previous.rows.length;
       }
 
-      const stock = await fetchAllPages('get_fba_stock_list', {
-        sid, search_field: 'sku', fulfillment_channel_type: 'FBA',
-        is_hide_zero_stock: '0', is_parant_asin_merge: '0', is_contain_del_ls: '1'
-      }, config.stockPageSize, `FBA inventory SID ${sid}`);
+      // --------------------------------------
+      // FBA INVENTORY
+      // --------------------------------------
+
+      const stock = await fetchAllPages(
+        'get_fba_stock_list',
+        {
+          sid,
+          search_field: 'sku',
+          fulfillment_channel_type: 'FBA',
+          is_hide_zero_stock: '0',
+          is_parant_asin_merge: '0',
+          is_contain_del_ls: '1'
+        },
+        getStockPageSize(),
+        `Inventory ${market.code} SID ${sid}`
+      );
+
       stocks.set(sid, stock.rows);
-      metrics.shops[sid].inventoryRows = stock.rows.length;
-      metrics.shops[sid].inventoryPages = stock.pages;
-      metrics.shops[sid].inventoryComplete = stock.complete;
+
+      metrics.shops[sid].inventoryRows =
+        stock.rows.length;
+
+      metrics.shops[sid].inventoryPages =
+        stock.pages;
+
+      metrics.shops[sid].inventoryComplete =
+        stock.complete;
     }
 
-    const listingRows = [...listings.values()].reduce((sum, rows) => sum + rows.length, 0);
-    if (!listingRows) throw new Error('Full catalog empty; previous successful snapshot remains available');
-    metrics.listingRows = listingRows;
-    metrics.uniqueShopSku = new Set([...listings.entries()].flatMap(([sid, rows]) => rows.map(row => `${sid}|${row.asin || ''}|${row.msku || ''}`))).size;
-    metrics.uniqueAsins = new Set([...listings.values()].flat().map(row => row.asin).filter(Boolean)).size;
-    metrics.salesRows = sales.reduce((sum, entry) => sum + entry[2].length, 0);
-    metrics.inventoryRows = [...stocks.values()].reduce((sum, rows) => sum + rows.length, 0);
-    metrics.zeroSalesListingCandidates = [...listings.values()].flat().filter(row => !n(row.seven_volume) && !n(row.thirty_volume)).length;
-    metrics.complete = true;
-    metrics.windows = Object.fromEntries(Object.entries(windows).map(([key, value]) => [key, value]));
+    // ----------------------------------------
+    // VALIDATE COMPLETE MARKET DATA
+    // ----------------------------------------
 
-    await replaceRunData(runId, listings, sales, stocks);
-    await finishRun(runId, 'success', metrics);
-    return { ok: true, runId, metrics };
+    const listingRows = [...listings.values()]
+      .reduce((sum, rows) => sum + rows.length, 0);
+
+    if (!listingRows) {
+      throw new Error(
+        `${market.code}: catalog empty; refusing to save`
+      );
+    }
+
+    metrics.listingRows = listingRows;
+
+    metrics.uniqueShopSku = new Set(
+      [...listings.entries()].flatMap(([sid, rows]) =>
+        rows.map(row =>
+          `${sid}|${row.asin || ''}|${row.msku || ''}`
+        )
+      )
+    ).size;
+
+    metrics.uniqueAsins = new Set(
+      [...listings.values()]
+        .flat()
+        .map(row => row.asin)
+        .filter(Boolean)
+    ).size;
+
+    metrics.salesRows = sales.reduce(
+      (sum, entry) => sum + entry[2].length,
+      0
+    );
+
+    metrics.inventoryRows = [...stocks.values()]
+      .reduce((sum, rows) => sum + rows.length, 0);
+
+    metrics.zeroSalesListingCandidates = [
+      ...listings.values()
+    ].flat().filter(row =>
+      !n(row.seven_volume) &&
+      !n(row.thirty_volume)
+    ).length;
+
+    metrics.complete = true;
+    metrics.windows = windows;
+
+    // ----------------------------------------
+    // SAVE MARKET SNAPSHOT
+    // New db.js argument order:
+    // runId, listings, sales, stocks, market, currency
+    // ----------------------------------------
+
+    await replaceRunData(
+      runId,
+      listings,
+      sales,
+      stocks,
+      market.code,
+      market.currency
+    );
+
+    await finishRun(
+      runId,
+      'success',
+      metrics
+    );
+
+    console.log(
+      `[V4] ${market.code} synchronization completed`
+    );
+
+    return {
+      ok: true,
+      runId,
+      marketCode: market.code,
+      metrics
+    };
+
   } catch (error) {
-    await finishRun(runId, 'failed', metrics, error.message);
-    throw error;
+    metrics.complete = false;
+
+    console.error(
+      `[V4] ${market.code} synchronization failed:`,
+      error.message
+    );
+
+    if (runStarted) {
+      try {
+        await finishRun(
+          runId,
+          'failed',
+          metrics,
+          error.message
+        );
+      } catch (dbError) {
+        console.error(
+          `[V4] ${market.code} failed to record error status:`,
+          dbError.message
+        );
+      }
+    }
+
+    return {
+      ok: false,
+      runId,
+      marketCode: market.code,
+      error: error.message,
+      metrics
+    };
   }
+}
+
+// ==========================================
+// FULL MULTI-MARKET SYNC
+// ==========================================
+
+export async function runFullSync(marketCode = null) {
+  assertConfig();
+
+  const selectedMarkets = marketCode
+    ? [config.markets[marketCode]]
+    : Object.values(config.markets);
+
+  if (
+    selectedMarkets.length === 0 ||
+    selectedMarkets.some(market => !market)
+  ) {
+    throw new Error(
+      `Unknown market: ${marketCode}`
+    );
+  }
+
+  const results = [];
+
+  // Sequential execution prevents overlapping
+  // market jobs from competing for the MCP connection.
+
+  for (const market of selectedMarkets) {
+    const result = await runMarketSync(market);
+    results.push(result);
+  }
+
+  const successful = results.filter(
+    result => result.ok
+  ).length;
+
+  const failed = results.length - successful;
+
+  return {
+    ok: failed === 0,
+    partialSuccess: successful > 0 && failed > 0,
+    markets: results,
+    summary: {
+      total: results.length,
+      successful,
+      failed
+    }
+  };
 }
