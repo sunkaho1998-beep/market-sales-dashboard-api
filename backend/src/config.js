@@ -1,3 +1,4 @@
+
 import 'dotenv/config';
 
 const usShopIds = JSON.parse(
@@ -21,6 +22,8 @@ export const config = {
 
   databaseUrl: process.env.DATABASE_URL || '',
   cron: process.env.SYNC_CRON || '30 3 * * *',
+
+  // Legacy default timezone
   timezone: process.env.SYNC_TIMEZONE || 'America/Los_Angeles',
 
   brandId: String(process.env.BRAND_ID || '304'),
@@ -33,6 +36,7 @@ export const config = {
       country: 'US',
       currency: 'USD',
       marketId: '1',
+      timezone: 'America/Los_Angeles',
       shopIds: usShopIds
     },
 
@@ -42,18 +46,19 @@ export const config = {
       country: 'AU',
       currency: 'AUD',
       marketId: String(process.env.AU_MARKET_ID || '12'),
+      timezone: 'Australia/Sydney',
       shopIds: auShopIds
     }
   },
 
-  // Legacy US configuration.
-  // Keep until the sync engine is upgraded.
+  // Legacy US compatibility
   shopIds: usShopIds,
   marketId: String(process.env.MARKET_ID || '1'),
 
   listingPageSize: Number(process.env.LISTING_PAGE_SIZE || 200),
   salesPageSize: Number(process.env.SALES_PAGE_SIZE || 200),
   stockPageSize: Number(process.env.STOCK_PAGE_SIZE || 200),
+
   lowStockDays: Number(process.env.LOW_STOCK_DAYS || 14)
 };
 
@@ -75,5 +80,11 @@ export function assertConfig() {
     throw new Error(
       'Missing required environment variables: ' + missing.join(', ')
     );
+  }
+
+  for (const market of Object.values(config.markets)) {
+    if (!market.shopIds.length) {
+      throw new Error('No shops configured for market ' + market.code);
+    }
   }
 }
