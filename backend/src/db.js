@@ -14,6 +14,34 @@ CREATE TABLE IF NOT EXISTS inventory_snapshots(id bigserial PRIMARY KEY, run_id 
 CREATE INDEX IF NOT EXISTS inv_run_idx ON inventory_snapshots(run_id,shop_id);
 CREATE TABLE IF NOT EXISTS sync_runs(id uuid PRIMARY KEY, started_at timestamptz NOT NULL, finished_at timestamptz, status text NOT NULL, metrics jsonb NOT NULL DEFAULT '{}'::jsonb, error text);
 CREATE TABLE IF NOT EXISTS partner_sessions(token_hash text PRIMARY KEY, created_at timestamptz NOT NULL, expires_at timestamptz NOT NULL);
+-- Multi-market support
+ALTER TABLE catalog_items
+  ADD COLUMN IF NOT EXISTS market_code text NOT NULL DEFAULT 'US',
+  ADD COLUMN IF NOT EXISTS currency_code text NOT NULL DEFAULT 'USD';
+
+ALTER TABLE sales_snapshots
+  ADD COLUMN IF NOT EXISTS market_code text NOT NULL DEFAULT 'US',
+  ADD COLUMN IF NOT EXISTS currency_code text NOT NULL DEFAULT 'USD';
+
+ALTER TABLE inventory_snapshots
+  ADD COLUMN IF NOT EXISTS market_code text NOT NULL DEFAULT 'US',
+  ADD COLUMN IF NOT EXISTS currency_code text NOT NULL DEFAULT 'USD';
+
+ALTER TABLE sync_runs
+  ADD COLUMN IF NOT EXISTS market_code text NOT NULL DEFAULT 'US',
+  ADD COLUMN IF NOT EXISTS currency_code text NOT NULL DEFAULT 'USD';
+
+CREATE INDEX IF NOT EXISTS catalog_market_idx
+  ON catalog_items(market_code, shop_id);
+
+CREATE INDEX IF NOT EXISTS sales_market_idx
+  ON sales_snapshots(market_code, run_id);
+
+CREATE INDEX IF NOT EXISTS inventory_market_idx
+  ON inventory_snapshots(market_code, run_id);
+
+CREATE INDEX IF NOT EXISTS sync_market_idx
+  ON sync_runs(market_code, started_at);
 `);}
 export async function createSession(hash,expires){await pool.query('INSERT INTO partner_sessions(token_hash,created_at,expires_at) VALUES($1,now(),$2)',[hash,expires]);}
 export async function hasSession(hash){const r=await pool.query('SELECT 1 FROM partner_sessions WHERE token_hash=$1 AND expires_at>now()',[hash]);return r.rowCount>0;}
