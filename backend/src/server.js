@@ -34,7 +34,6 @@ app.set('trust proxy', 1);
 app.use(express.json({ limit: '100kb' }));
 
 const COOKIE = 'partner_session';
-
 const VALID_MARKETS = ['US', 'AU'];
 
 const hash = value =>
@@ -49,6 +48,10 @@ const eq = (a, b) => {
     crypto.timingSafeEqual(x, y)
   );
 };
+
+// ==========================================
+// COOKIE PARSING
+// ==========================================
 
 function cookies(value = '') {
   return Object.fromEntries(
@@ -67,6 +70,10 @@ function cookies(value = '') {
   );
 }
 
+// ==========================================
+// ADMIN AUTHENTICATION
+// ==========================================
+
 function admin(req, res, next) {
   const token = (req.get('authorization') || '')
     .replace(/^Bearer\s+/i, '');
@@ -79,6 +86,10 @@ function admin(req, res, next) {
 
   next();
 }
+
+// ==========================================
+// PARTNER AUTHENTICATION
+// ==========================================
 
 async function partner(req, res, next) {
   try {
@@ -98,13 +109,20 @@ async function partner(req, res, next) {
     });
 
   } catch (error) {
-    console.error('Partner authentication error:', error.message);
+    console.error(
+      'Partner authentication error:',
+      error.message
+    );
 
     return res.status(500).json({
       error: 'Authentication service unavailable'
     });
   }
 }
+
+// ==========================================
+// MARKET VALIDATION
+// ==========================================
 
 function getMarket(value, res) {
   const market = String(value || 'US').toUpperCase();
@@ -137,13 +155,34 @@ async function executeSync(marketCode = null) {
 
   try {
     return await runFullSync(marketCode);
+
   } finally {
     syncLock = false;
   }
 }
 
 // ==========================================
-// HEALTH
+// SYNC HTTP STATUS
+// ==========================================
+
+function syncHttpStatus(result) {
+  if (!result || result.ok === false) {
+    if (result?.partialSuccess) {
+      return 207;
+    }
+
+    return 502;
+  }
+
+  if (result.partialSuccess) {
+    return 207;
+  }
+
+  return 200;
+}
+
+// ==========================================
+// HEALTH CHECK
 // ==========================================
 
 app.get('/health', async (_req, res) => {
@@ -158,6 +197,8 @@ app.get('/health', async (_req, res) => {
     });
 
   } catch (error) {
+    console.error('Health check failed:', error.message);
+
     res.status(503).json({
       ok: false,
       db: 'unavailable'
@@ -238,6 +279,10 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+// ==========================================
+// LOGOUT
+// ==========================================
+
 app.post('/api/auth/logout', async (req, res) => {
   try {
     const token = cookies(
@@ -255,14 +300,22 @@ app.post('/api/auth/logout', async (req, res) => {
       path: '/'
     });
 
-    res.json({ ok: true });
+    res.json({
+      ok: true
+    });
 
   } catch (error) {
+    console.error('Logout error:', error.message);
+
     res.status(500).json({
       error: 'Logout failed'
     });
   }
 });
+
+// ==========================================
+// AUTH STATUS
+// ==========================================
 
 app.get('/api/auth/me', partner, (_req, res) => {
   res.json({
@@ -274,8 +327,8 @@ app.get('/api/auth/me', partner, (_req, res) => {
 // MARKET-SPECIFIC DASHBOARD
 // ==========================================
 
-// Default market is US for backward compatibility.
-// AU can be requested with ?market=AU.
+// GET /api/partner/dashboard?market=US
+// GET /api/partner/dashboard?market=AU
 
 app.get(
   '/api/partner/dashboard',
@@ -291,14 +344,18 @@ app.get(
       if (!dashboard) {
         return res.status(503).json({
           error: `No successful ${market} sync yet`,
-          market
+          market,
+          available: false
         });
       }
 
       res.json(dashboard);
 
     } catch (error) {
-      console.error('Dashboard error:', error.message);
+      console.error(
+        'Dashboard error:',
+        error.message
+      );
 
       res.status(500).json({
         error: 'Dashboard query failed'
@@ -321,7 +378,10 @@ app.get(
       res.json(overview);
 
     } catch (error) {
-      console.error('Global overview error:', error.message);
+      console.error(
+        'Global overview error:',
+        error.message
+      );
 
       res.status(500).json({
         error: 'Global overview query failed'
@@ -333,6 +393,9 @@ app.get(
 // ==========================================
 // MARKET SYNC STATUS
 // ==========================================
+
+// GET /api/partner/status?market=US
+// GET /api/partner/status?market=AU
 
 app.get(
   '/api/partner/status',
@@ -347,14 +410,26 @@ app.get(
 
       res.json({
         market,
+
         status: r?.status || 'not_synced',
-        currencyCode: r?.currency_code ||
+
+        currencyCode:
+          r?.currency_code ||
           config.markets[market].currency,
-        lastSuccessfulSync: r?.finished_at || null,
-        metrics: r?.metrics || {}
+
+        lastSuccessfulSync:
+          r?.finished_at || null,
+
+        metrics:
+          r?.metrics || {}
       });
 
     } catch (error) {
+      console.error(
+        'Market status error:',
+        error.message
+      );
+
       res.status(500).json({
         error: 'Status query failed'
       });
@@ -378,9 +453,15 @@ app.get(
 
         result[market] = {
           status: r?.status || 'not_synced',
-          currencyCode: config.markets[market].currency,
-          lastSuccessfulSync: r?.finished_at || null,
-          metrics: r?.metrics || {}
+
+          currencyCode:
+            config.markets[market].currency,
+
+          lastSuccessfulSync:
+            r?.finished_at || null,
+
+          metrics:
+            r?.metrics || {}
         };
       }
 
@@ -389,6 +470,11 @@ app.get(
       });
 
     } catch (error) {
+      console.error(
+        'Global status error:',
+        error.message
+      );
+
       res.status(500).json({
         error: 'Global status query failed'
       });
@@ -410,6 +496,11 @@ app.get(
       });
 
     } catch (error) {
+      console.error(
+        'MCP inspection error:',
+        error.message
+      );
+
       res.status(502).json({
         error: error.message
       });
@@ -422,9 +513,9 @@ app.get(
 // ==========================================
 
 // POST /api/admin/sync
-// Body: {}          = synchronize all markets
-// Body: {market:"US"} = US only
-// Body: {market:"AU"} = AU only
+// Body: {}             = all markets
+// Body: {market:"US"}  = US only
+// Body: {market:"AU"}  = AU only
 
 app.post(
   '/api/admin/sync',
@@ -443,10 +534,23 @@ app.post(
 
       const result = await executeSync(market);
 
-      res.json(result);
+      const statusCode = syncHttpStatus(result);
+
+      console.log(
+        'Admin sync result:',
+        JSON.stringify(result.summary || {
+          market,
+          ok: result.ok
+        })
+      );
+
+      res.status(statusCode).json(result);
 
     } catch (error) {
-      console.error('Admin sync error:', error.message);
+      console.error(
+        'Admin sync error:',
+        error.message
+      );
 
       res.status(error.statusCode || 502).json({
         ok: false,
@@ -464,51 +568,57 @@ const dir = path.dirname(
   fileURLToPath(import.meta.url)
 );
 
-app.use(
-  express.static(
-    path.resolve(dir, '../../frontend/dist')
-  )
+const frontendDist = path.resolve(
+  dir,
+  '../../frontend/dist'
 );
+
+app.use(express.static(frontendDist));
 
 app.get('/{*splat}', (_req, res) => {
   res.sendFile(
-    path.resolve(dir, '../../frontend/dist/index.html')
+    path.join(frontendDist, 'index.html')
   );
 });
 
 // ==========================================
-// SCHEDULED SYNC
+// SCHEDULED MULTI-MARKET SYNC
 // ==========================================
-
-// The scheduler runs both markets.
-// Each market calculates its own date window.
 
 cron.schedule(
   config.cron,
   async () => {
     if (syncLock) {
-      console.log('Scheduled sync skipped: another sync is running');
+      console.log(
+        'Scheduled sync skipped: another sync is running'
+      );
+
       return;
     }
 
-    syncLock = true;
+    console.log(
+      '[V4] Scheduled multi-market sync started'
+    );
 
     try {
-      const result = await runFullSync();
+      const result = await executeSync();
 
       console.log(
-        'Scheduled multi-market sync completed:',
+        '[V4] Scheduled sync result:',
         JSON.stringify(result.summary)
       );
 
+      if (result.summary?.failed > 0) {
+        console.error(
+          '[V4] Some markets failed synchronization'
+        );
+      }
+
     } catch (error) {
       console.error(
-        'Scheduled sync failed:',
+        '[V4] Scheduled sync failed:',
         error.message
       );
-
-    } finally {
-      syncLock = false;
     }
   },
   {
@@ -527,5 +637,9 @@ app.listen(config.port, () => {
 
   console.log(
     'Enabled markets: US/USD, AU/AUD'
+  );
+
+  console.log(
+    `Scheduled sync: ${config.cron} (${config.timezone})`
   );
 });
