@@ -1,3 +1,4 @@
+
 import pg from 'pg';
 import { config } from './config.js';
 
@@ -13,9 +14,9 @@ export const pool = new Pool({
   connectionTimeoutMillis: 10000
 });
 
-// ------------------------------------------
-// Database initialization and safe migrations
-// ------------------------------------------
+// ==========================================
+// DATABASE INITIALIZATION
+// ==========================================
 
 export async function initDb() {
   await pool.query(`
@@ -75,7 +76,6 @@ export async function initDb() {
       expires_at timestamptz NOT NULL
     );
 
-    -- Multi-market columns. Existing records default to US/USD.
     ALTER TABLE catalog_items
       ADD COLUMN IF NOT EXISTS market_code text NOT NULL DEFAULT 'US',
       ADD COLUMN IF NOT EXISTS currency_code text NOT NULL DEFAULT 'USD';
@@ -104,58 +104,102 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS sales_market_idx
       ON sales_snapshots(market_code, run_id);
 
+    CREATE INDEX IF NOT EXISTS sales_sku_lookup_idx
+      ON sales_snapshots(run_id, shop_id, period_days, seller_sku);
+
     CREATE INDEX IF NOT EXISTS inv_run_idx
       ON inventory_snapshots(run_id, shop_id);
 
     CREATE INDEX IF NOT EXISTS inventory_market_idx
       ON inventory_snapshots(market_code, run_id);
 
+    CREATE INDEX IF NOT EXISTS inventory_sku_lookup_idx
+      ON inventory_snapshots(run_id, shop_id, seller_sku, local_sku);
+
     CREATE INDEX IF NOT EXISTS sync_market_idx
       ON sync_runs(market_code, started_at);
   `);
 }
 
-// ------------------------------------------
-// Partner sessions
-// ------------------------------------------
+// ==========================================
+// MARKET VALIDATION
+// ==========================================
+
+function validateMarket(marketCode, currencyCode) {
+  const expected = {
+    US: 'USD',
+    AU: 'AUD'
+  };
+
+  if (!expected[marketCode]) {
+    throw new Error(`Unsupported market: ${marketCode}`);
+  }
+
+  if (expected[marketCode] !== currencyCode) {
+    throw new Error(
+      `Invalid currency ${currencyCode} for ${marketCode}`
+    );
+  }
+}
+
+// ==========================================
+// PARTNER SESSIONS
+// ==========================================
 
 export async function createSession(hash, expires) {
   await pool.query(
-    'INSERT INTO partner_sessions(token_hash,created_at,expires_at) VALUES($1,now(),$2)',
+    `INSERT INTO partner_sessions
+      (token_hash, created_at, expires_at)
+     VALUES ($1, now(), $2)`,
     [hash, expires]
   );
 }
 
 export async function hasSession(hash) {
   const r = await pool.query(
-    'SELECT 1 FROM partner_sessions WHERE token_hash=$1 AND expires_at>now()',
+    `SELECT 1 FROM partner_sessions
+     WHERE token_hash = $1 AND expires_at > now()`,
     [hash]
   );
+
   return r.rowCount > 0;
 }
 
 export async function deleteSession(hash) {
   await pool.query(
-    'DELETE FROM partner_sessions WHERE token_hash=$1',
+    'DELETE FROM partner_sessions WHERE token_hash = $1',
     [hash]
   );
 }
 
-// ------------------------------------------
-// Market-aware synchronization records
-// ------------------------------------------
+// ==========================================
+// SYNC RUN MANAGEMENT
+// ==========================================
 
 export async function latestRun(marketCode = null) {
-  const r = marketCode
+  if (marketCode && !['US', 'AU'].includes(marketCode)) {
+    throw new Error(`Unsupported market: ${marketCode}`);
+  }
+
+  const result = marketCode
     ? await pool.query(
-        "SELECT * FROM sync_runs WHERE status='success' AND market_code=$1 ORDER BY finished_at DESC LIMIT 1",
+        `SELECT *
+         FROM sync_runs
+         WHERE status = 'success'
+           AND market_code = $1
+         ORDER BY finished_at DESC
+         LIMIT 1`,
         [marketCode]
       )
     : await pool.query(
-        "SELECT * FROM sync_runs WHERE status='success' ORDER BY finished_at DESC LIMIT 1"
+        `SELECT *
+         FROM sync_runs
+         WHERE status = 'success'
+         ORDER BY finished_at DESC
+         LIMIT 1`
       );
 
-  return r.rows[0] || null;
+  return result.rows[0] || null;
 }
 
 export async function saveRunStart(
@@ -163,22 +207,37 @@ export async function saveRunStart(
   marketCode = 'US',
   currencyCode = 'USD'
 ) {
+  validateMarket(marketCode, currencyCode);
+
   await pool.query(
-    "INSERT INTO sync_runs(id,started_at,status,market_code,currency_code) VALUES($1,now(),'running',$2,$3)",
+    `INSERT INTO sync_runs (
+      id, started_at, status, market_code, currency_code
+    )
+    VALUES ($1, now(), 'running', $2, $3)`,
     [id, marketCode, currencyCode]
   );
 }
 
-export async function finishRun(id, status, metrics = {}, error = null) {
+export async function finishRun(
+  id,
+  status,
+  metrics = {},
+  error = null
+) {
   await pool.query(
-    'UPDATE sync_runs SET finished_at=now(),status=$2,metrics=$3::jsonb,error=$4 WHERE id=$1',
+    `UPDATE sync_runs
+     SET finished_at = now(),
+         status = $2,
+         metrics = $3::jsonb,
+         error = $4
+     WHERE id = $1`,
     [id, status, JSON.stringify(metrics), error]
   );
 }
 
-// ------------------------------------------
-// Multi-market data persistence
-// ------------------------------------------
+// ==========================================
+// MARKET DATA PERSISTENCE
+// ==========================================
 
 export async function replaceRunData(
   runId,
@@ -188,12 +247,20 @@ export async function replaceRunData(
   marketCode = 'US',
   currencyCode = 'USD'
 ) {
-  if (!['US', 'AU'].includes(marketCode)) {
-    throw new Error('Unsupported market: ' + marketCode);
-  }
+  validateMarket(marketCode, currencyCode);
 
-  if (!['USD', 'AUD'].includes(currencyCode)) {
-    throw new Error('Unsupported currency: ' + currencyCode);
+  const runCheck = await pool.query(
+    `SELECT id
+     FROM sync_runs
+     WHERE id = $1
+       AND market_code = $2
+       AND currency_code = $3
+       AND status = 'running'`,
+    [runId, marketCode, currencyCode]
+  );
+
+  if (runCheck.rowCount !== 1) {
+    throw new Error(`Sync run not found or market mismatch: ${runId}`);
   }
 
   const c = await pool.connect();
@@ -201,32 +268,34 @@ export async function replaceRunData(
   try {
     await c.query('BEGIN');
 
+    // CATALOG
     for (const [sid, rows] of listingByShop) {
       for (const x of rows) {
-        const identityKey = `${x.asin || ''}|${x.msku || ''}`;
+        const identityKey =
+          `${x.asin || ''}|${x.msku || ''}`;
 
         await c.query(`
-          INSERT INTO catalog_items(
-            shop_id,market_code,currency_code,
-            identity_key,asin,msku,local_sku,
-            title,image_url,category,listing_status,
-            last_seen_run_id,raw,updated_at
+          INSERT INTO catalog_items (
+            shop_id, market_code, currency_code,
+            identity_key, asin, msku, local_sku,
+            title, image_url, category, listing_status,
+            last_seen_run_id, raw, updated_at
           )
-          VALUES(
+          VALUES (
             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now()
           )
-          ON CONFLICT(shop_id,identity_key)
+          ON CONFLICT (shop_id, identity_key)
           DO UPDATE SET
-            market_code=EXCLUDED.market_code,
-            currency_code=EXCLUDED.currency_code,
-            local_sku=EXCLUDED.local_sku,
-            title=EXCLUDED.title,
-            image_url=EXCLUDED.image_url,
-            category=EXCLUDED.category,
-            listing_status=EXCLUDED.listing_status,
-            last_seen_run_id=EXCLUDED.last_seen_run_id,
-            raw=EXCLUDED.raw,
-            updated_at=now()
+            market_code = EXCLUDED.market_code,
+            currency_code = EXCLUDED.currency_code,
+            local_sku = EXCLUDED.local_sku,
+            title = EXCLUDED.title,
+            image_url = EXCLUDED.image_url,
+            category = EXCLUDED.category,
+            listing_status = EXCLUDED.listing_status,
+            last_seen_run_id = EXCLUDED.last_seen_run_id,
+            raw = EXCLUDED.raw,
+            updated_at = now()
         `, [
           sid,
           marketCode,
@@ -245,6 +314,7 @@ export async function replaceRunData(
       }
     }
 
+    // SALES
     for (const [sid, period, rows] of salesByShop) {
       for (const x of rows) {
         const units = Number(
@@ -252,26 +322,31 @@ export async function replaceRunData(
         ) || 0;
 
         const previous = Number(
-          String(x?._previous_units ?? x?.date2?.volume ?? 0)
-            .replaceAll(',', '')
+          String(
+            x?._previous_units ?? x?.date2?.volume ?? 0
+          ).replaceAll(',', '')
         ) || 0;
 
+        const sellerSku = (
+          Array.isArray(x.seller_sku)
+            ? x.seller_sku[0]
+            : x.seller_sku
+        ) || x.msku || null;
+
         await c.query(`
-          INSERT INTO sales_snapshots(
-            run_id,shop_id,market_code,currency_code,
-            period_days,seller_sku,asin,
-            units,previous_units,raw
+          INSERT INTO sales_snapshots (
+            run_id, shop_id, market_code, currency_code,
+            period_days, seller_sku, asin,
+            units, previous_units, raw
           )
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
         `, [
           runId,
           sid,
           marketCode,
           currencyCode,
           period,
-          (Array.isArray(x.seller_sku)
-            ? x.seller_sku[0]
-            : x.seller_sku) || x.msku || null,
+          sellerSku,
           x.asin || null,
           units,
           previous,
@@ -280,22 +355,23 @@ export async function replaceRunData(
       }
     }
 
+    // INVENTORY
     for (const [sid, rows] of stockByShop) {
       for (const x of rows) {
         await c.query(`
-          INSERT INTO inventory_snapshots(
-            run_id,shop_id,market_code,currency_code,
-            asin,local_sku,seller_sku,
-            available,reserved,raw
+          INSERT INTO inventory_snapshots (
+            run_id, shop_id, market_code, currency_code,
+            asin, local_sku, seller_sku,
+            available, reserved, raw
           )
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
         `, [
           runId,
           sid,
           marketCode,
           currencyCode,
           x.asin || null,
-          x.sku || null,
+          x.sku || x.local_sku || null,
           x.seller_sku || null,
           Number(x.afn_fulfillable_quantity) || 0,
           Number(x.afn_reserved_quantity) || 0,
@@ -306,32 +382,168 @@ export async function replaceRunData(
 
     await c.query('COMMIT');
 
-  } catch (e) {
+  } catch (error) {
     await c.query('ROLLBACK');
-    throw e;
+    throw error;
 
   } finally {
     c.release();
   }
 }
 
-// ------------------------------------------
-// Market-specific dashboard
-// ------------------------------------------
+// ==========================================
+// SALES LOOKUP
+// SKU FIRST; ASIN FALLBACK ONLY WITHOUT SKU
+// ==========================================
+
+async function getSalesForSku(
+  marketCode,
+  runId,
+  shopId,
+  period,
+  asin,
+  sellerSku
+) {
+  const result = await pool.query(`
+    SELECT
+      COALESCE(SUM(units), 0) AS units,
+      COALESCE(SUM(previous_units), 0) AS prev
+    FROM sales_snapshots
+    WHERE market_code = $1
+      AND run_id = $2
+      AND shop_id = $3
+      AND period_days = $4
+      AND (
+        ($5::text IS NOT NULL AND seller_sku = $5)
+        OR
+        ($5::text IS NULL AND $6::text IS NOT NULL AND asin = $6)
+      )
+  `, [
+    marketCode,
+    runId,
+    shopId,
+    period,
+    sellerSku || null,
+    asin || null
+  ]);
+
+  return {
+    units: Number(result.rows[0].units),
+    prev: Number(result.rows[0].prev)
+  };
+}
+
+// ==========================================
+// INVENTORY LOOKUP
+// MATCH SELLER SKU, THEN LOCAL SKU, THEN ASIN
+// ==========================================
+
+async function getInventoryForSku(
+  marketCode,
+  runId,
+  shopId,
+  asin,
+  sellerSku,
+  localSku
+) {
+  const base = `
+    SELECT
+      COUNT(*)::int AS rows,
+      COALESCE(SUM(available), 0) AS available,
+      COALESCE(SUM(reserved), 0) AS reserved
+    FROM inventory_snapshots
+    WHERE market_code = $1
+      AND run_id = $2
+      AND shop_id = $3
+  `;
+
+  const params = [marketCode, runId, shopId];
+
+  // First: exact Seller SKU match.
+  if (sellerSku) {
+    const r = await pool.query(
+      base + ' AND seller_sku = $4',
+      [...params, sellerSku]
+    );
+
+    if (Number(r.rows[0].rows) > 0) {
+      return {
+        rows: Number(r.rows[0].rows),
+        available: Number(r.rows[0].available),
+        reserved: Number(r.rows[0].reserved),
+        matchedBy: 'seller_sku'
+      };
+    }
+  }
+
+  // Second: inventory SKU is stored as local_sku.
+  if (localSku) {
+    const r = await pool.query(
+      base + ' AND local_sku = $4',
+      [...params, localSku]
+    );
+
+    if (Number(r.rows[0].rows) > 0) {
+      return {
+        rows: Number(r.rows[0].rows),
+        available: Number(r.rows[0].available),
+        reserved: Number(r.rows[0].reserved),
+        matchedBy: 'local_sku'
+      };
+    }
+  }
+
+  // Last resort: ASIN fallback.
+  if (asin) {
+    const r = await pool.query(
+      base + ' AND asin = $4',
+      [...params, asin]
+    );
+
+    return {
+      rows: Number(r.rows[0].rows),
+      available: Number(r.rows[0].available),
+      reserved: Number(r.rows[0].reserved),
+      matchedBy: Number(r.rows[0].rows) > 0 ? 'asin' : 'none'
+    };
+  }
+
+  return {
+    rows: 0,
+    available: 0,
+    reserved: 0,
+    matchedBy: 'none'
+  };
+}
+
+// ==========================================
+// MARKET DASHBOARD
+// ==========================================
 
 export async function getDashboard(marketCode = 'US') {
   if (!['US', 'AU'].includes(marketCode)) {
-    throw new Error('Unsupported market: ' + marketCode);
+    throw new Error(`Unsupported market: ${marketCode}`);
   }
 
   const run = await latestRun(marketCode);
+
   if (!run) return null;
 
   const catalog = await pool.query(`
-    SELECT shop_id,market_code,currency_code,
-      asin,msku,local_sku,title,image_url,category,listing_status
+    SELECT
+      shop_id,
+      market_code,
+      currency_code,
+      asin,
+      msku,
+      local_sku,
+      title,
+      image_url,
+      category,
+      listing_status
     FROM catalog_items
-    WHERE market_code=$1 AND last_seen_run_id=$2
+    WHERE market_code = $1
+      AND last_seen_run_id = $2
     ORDER BY title
   `, [marketCode, run.id]);
 
@@ -339,122 +551,139 @@ export async function getDashboard(marketCode = 'US') {
 
   for (const x of catalog.rows) {
     const [s7, s30, s90, inv] = await Promise.all([
-      pool.query(`
-        SELECT COALESCE(sum(units),0) units,
-          COALESCE(sum(previous_units),0) prev
-        FROM sales_snapshots
-        WHERE market_code=$1 AND run_id=$2 AND shop_id=$3
-          AND period_days=7 AND (asin=$4 OR seller_sku=$5)
-      `, [marketCode, run.id, x.shop_id, x.asin, x.msku]),
-
-      pool.query(`
-        SELECT COALESCE(sum(units),0) units,
-          COALESCE(sum(previous_units),0) prev
-        FROM sales_snapshots
-        WHERE market_code=$1 AND run_id=$2 AND shop_id=$3
-          AND period_days=30 AND (asin=$4 OR seller_sku=$5)
-      `, [marketCode, run.id, x.shop_id, x.asin, x.msku]),
-
-      pool.query(`
-        SELECT COALESCE(sum(units),0) units,
-          COALESCE(sum(previous_units),0) prev
-        FROM sales_snapshots
-        WHERE market_code=$1 AND run_id=$2 AND shop_id=$3
-          AND period_days=90 AND (asin=$4 OR seller_sku=$5)
-      `, [marketCode, run.id, x.shop_id, x.asin, x.msku]),
-
-      pool.query(`
-        SELECT count(*)::int rows,
-          COALESCE(sum(available),0) available,
-          COALESCE(sum(reserved),0) reserved
-        FROM inventory_snapshots
-        WHERE market_code=$1 AND run_id=$2 AND shop_id=$3 AND asin=$4
-      `, [marketCode, run.id, x.shop_id, x.asin])
+      getSalesForSku(
+        marketCode, run.id, x.shop_id, 7, x.asin, x.msku
+      ),
+      getSalesForSku(
+        marketCode, run.id, x.shop_id, 30, x.asin, x.msku
+      ),
+      getSalesForSku(
+        marketCode, run.id, x.shop_id, 90, x.asin, x.msku
+      ),
+      getInventoryForSku(
+        marketCode,
+        run.id,
+        x.shop_id,
+        x.asin,
+        x.msku,
+        x.local_sku
+      )
     ]);
 
-    const available = Number(inv.rows[0].available);
-    const units30 = Number(s30.rows[0].units);
+    const available = inv.available;
+    const units30 = s30.units;
     const velocity = units30 / 30;
-    const previous7 = Number(s7.rows[0].prev);
-    const previous30 = Number(s30.rows[0].prev);
+
+    const listingStatus = String(
+      x.listing_status || 'Unknown'
+    );
+
+    const normalizedStatus = listingStatus.toLowerCase();
+
+    const inactive = [
+      'inactive',
+      '停售',
+      '已停售',
+      'deleted'
+    ].some(value => normalizedStatus.includes(value));
 
     items.push({
       id: `${marketCode}|${x.shop_id}|${x.asin || ''}|${x.msku || ''}`,
+
       marketCode,
       currencyCode: x.currency_code,
+
       shopId: x.shop_id,
       asin: x.asin,
       sku: x.msku,
       localSku: x.local_sku,
+
       title: x.title,
       imageUrl: x.image_url,
       category: x.category,
-      listingStatus: x.listing_status,
+      listingStatus,
 
-      sales7: Number(s7.rows[0].units),
-      previousSales7: previous7,
-      growth7: previous7 > 0
-        ? (Number(s7.rows[0].units) - previous7) / previous7 * 100
+      sales7: s7.units,
+      previousSales7: s7.prev,
+      growth7: s7.prev > 0
+        ? ((s7.units - s7.prev) / s7.prev) * 100
         : null,
 
       sales30: units30,
-      previousSales30: previous30,
-      growth30: previous30 > 0
-        ? (units30 - previous30) / previous30 * 100
+      previousSales30: s30.prev,
+      growth30: s30.prev > 0
+        ? ((units30 - s30.prev) / s30.prev) * 100
         : null,
 
-      sales90: Number(s90.rows[0].units),
-      previousSales90: Number(s90.rows[0].prev),
-      dailyAverage30: units30 / 30,
+      sales90: s90.units,
+      previousSales90: s90.prev,
 
-      availableStock: Number(inv.rows[0].rows) > 0 ? available : null,
-      reservedStock: Number(inv.rows[0].rows) > 0
-        ? Number(inv.rows[0].reserved)
+      availableStock: inv.rows > 0 ? available : null,
+      reservedStock: inv.rows > 0 ? inv.reserved : null,
+      inventoryMatchedBy: inv.matchedBy,
+
+      daysOfCover: velocity > 0
+        ? available / velocity
         : null,
 
-      daysOfCover: velocity > 0 ? available / velocity : null,
-
-      status: Number(inv.rows[0].rows) === 0
+      status: inv.rows === 0
         ? 'unknown'
         : available === 0
           ? 'stockout'
           : velocity > 0 && available / velocity < config.lowStockDays
             ? 'low'
-            : 'healthy'
+            : 'healthy',
+
+      isInactive: inactive
     });
   }
 
   const shops = await pool.query(`
-    SELECT shop_id,count(*)::int AS count
+    SELECT
+      shop_id,
+      COUNT(*)::int AS count
     FROM catalog_items
-    WHERE market_code=$1
+    WHERE market_code = $1
+      AND last_seen_run_id = $2
     GROUP BY shop_id
     ORDER BY shop_id
-  `, [marketCode]);
+  `, [marketCode, run.id]);
 
   return {
     meta: {
       source: 'LingXing MCP',
+      marketplace: marketCode === 'US'
+        ? 'Amazon US'
+        : 'Amazon Australia',
+
       marketCode,
       currencyCode: run.currency_code,
       generatedAt: run.finished_at,
       isMock: false,
+
       catalogCount: items.length,
-      zeroSalesCount: items.filter(x => !x.sales7 && !x.sales30).length,
-      inactiveCount: items.filter(x =>
-        ['inactive', '停售', '已停售', '已删除', 'deleted']
-          .some(s => String(x.listingStatus).toLowerCase().includes(s))
+
+      zeroSalesCount: items.filter(
+        x => !x.sales7 && !x.sales30
       ).length,
+
+      inactiveCount: items.filter(
+        x => x.isInactive
+      ).length,
+
       shopCounts: shops.rows,
       runMetrics: run.metrics
     },
+
     items
   };
 }
 
-// ------------------------------------------
-// Global overview: never combine currencies
-// ------------------------------------------
+// ==========================================
+// GLOBAL OVERVIEW
+// Sales values are UNITS, not revenue.
+// US and AU remain separate.
+// ==========================================
 
 export async function getGlobalOverview() {
   const markets = {};
@@ -462,33 +691,61 @@ export async function getGlobalOverview() {
   for (const marketCode of ['US', 'AU']) {
     const dashboard = await getDashboard(marketCode);
 
-    markets[marketCode] = dashboard
-      ? {
-          available: true,
-          currencyCode: dashboard.meta.currencyCode,
-          generatedAt: dashboard.meta.generatedAt,
-          catalogCount: dashboard.meta.catalogCount,
-          zeroSalesCount: dashboard.meta.zeroSalesCount,
-          inactiveCount: dashboard.meta.inactiveCount,
-          shopCounts: dashboard.meta.shopCounts,
-          runMetrics: dashboard.meta.runMetrics,
-          sales7: dashboard.items.reduce((s, x) => s + x.sales7, 0),
-          sales30: dashboard.items.reduce((s, x) => s + x.sales30, 0),
-          sales90: dashboard.items.reduce((s, x) => s + x.sales90, 0)
-        }
-      : {
-          available: false,
-          currencyCode: marketCode === 'US' ? 'USD' : 'AUD',
+    if (!dashboard) {
+      markets[marketCode] = {
+        available: false,
+        marketCode,
+        currencyCode: config.markets[marketCode].currency,
+        shopCounts: [],
+        data: {
           catalogCount: 0,
+          zeroSalesCount: 0,
+          inactiveCount: 0,
           sales7: 0,
           sales30: 0,
           sales90: 0
-        };
+        }
+      };
+
+      continue;
+    }
+
+    const items = dashboard.items;
+
+    markets[marketCode] = {
+      available: true,
+      marketCode,
+      currencyCode: dashboard.meta.currencyCode,
+      generatedAt: dashboard.meta.generatedAt,
+      shopCounts: dashboard.meta.shopCounts,
+
+      data: {
+        catalogCount: dashboard.meta.catalogCount,
+        zeroSalesCount: dashboard.meta.zeroSalesCount,
+        inactiveCount: dashboard.meta.inactiveCount,
+
+        sales7: items.reduce(
+          (sum, item) => sum + item.sales7, 0
+        ),
+
+        sales30: items.reduce(
+          (sum, item) => sum + item.sales30, 0
+        ),
+
+        sales90: items.reduce(
+          (sum, item) => sum + item.sales90, 0
+        )
+      }
+    };
   }
 
   return {
     generatedAt: new Date().toISOString(),
     markets,
-    note: 'US and AU figures are reported separately. Different currencies are never added together.'
+
+    note:
+      'Sales figures represent units sold, not revenue. ' +
+      'US and AU are reported separately. ' +
+      'USD and AUD are never added together.'
   };
 }
