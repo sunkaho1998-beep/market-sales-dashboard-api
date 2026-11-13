@@ -85,8 +85,10 @@ export async function runFullSync() {
 
     for (const sid of ids) {
       const listing = await fetchAllPages('erp_listing', {
-        pvi_ids: '', sids: sid, mids: config.marketId, bid: config.brandId,
-        sort_field: 'msku', sort_type: 'asc'
+pvi_ids: '',
+sids: sid,
+search_field: 'msku',
+exact_search: '0'
       }, Math.min(config.listingPageSize, 200), `Listing SID ${sid}`);
       if (!listing.rows.length) throw new Error(`Listing returned zero rows for SID ${sid}; refusing to replace catalog`);
       listings.set(sid, listing.rows);
