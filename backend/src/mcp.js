@@ -1,132 +1,14 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { config } from './config.js';
-
-export async function withLingxingClient(fn) {
-  const client = new Client({ name: 'keychron-partner-dashboard', version: '3.2.0' });
-  const transport = new StreamableHTTPClientTransport(new URL(config.mcpUrl), {
-    requestInit: { headers: { 'X-Mcp-Key': config.mcpKey } }
-  });
-  try {
-    await client.connect(transport);
-    return await fn(client);
-  } finally {
-    await client.close().catch(() => {});
-  }
-}
-
-function findTool(tools, suffix) {
-  const matches = tools.filter(t => t.name === suffix || t.name.endsWith(`__${suffix}`));
-  if (matches.length !== 1) throw new Error(`Expected one MCP wrapper tool '${suffix}', found ${matches.length}`);
-  return matches[0];
-}
-
-export async function createLingxingGateway(client) {
-  let tools = (await client.listTools()).tools || [];
-  let helpTool = findTool(tools, 'help');
-  let searchTool = findTool(tools, 'search');
-  let actionTool = findTool(tools, 'action');
-  const schemaCache = new Map();
-
-  const pause = () => new Promise(resolve => setTimeout(resolve, 1100));
-  function errorText(error) {
-    const parts = [error?.message, error?.stack];
-    if (error?.content) parts.push(JSON.stringify(error.content));
-    if (error?.cause) parts.push(JSON.stringify(error.cause));
-    return parts.filter(Boolean).join(' ');
-  }
-  function isSchemaStale(error) {
-    const text = errorText(error).toLowerCase();
-    return text.includes('工具参数定义已更新') ||
-      text.includes('刷新工具列表') ||
-      text.includes('schema has changed') ||
-      text.includes('tool schema') && text.includes('updated') ||
-      text.includes('status: 422') || text.includes('status 422');
-  }
-  async function refreshWrappers() {
-    // LingXing can invalidate cached tool definitions while the MCP connection remains open.
-    // Refresh the advertised wrapper list before rediscovering the business tool schema.
-    tools = (await client.listTools()).tools || [];
-    helpTool = findTool(tools, 'help');
-    searchTool = findTool(tools, 'search');
-    actionTool = findTool(tools, 'action');
-    schemaCache.clear();
-  }
-  async function callWrapper(tool, args) {
-    const result = await client.callTool({ name: tool.name, arguments: args });
-    await pause(); // respect LingXing QPS=1
-    if (result.isError) throw new Error(`${tool.name} failed: ${JSON.stringify(result.content || [])}`);
-    const payload = parsePayload(result);
-    if (payload?.success === false || payload?.code === 102) {
-      throw new Error(`${tool.name} failed: ${JSON.stringify(payload)}`);
-    }
-    return result;
-  }
-  async function discover(toolId, force = false) {
-    if (!force && schemaCache.has(toolId)) return schemaCache.get(toolId);
-    // Always rediscover the business tool through help -> search; forced refresh bypasses cache.
-    await callWrapper(helpTool, { query: toolId, limit: 50, offset: 0 });
-    const result = await callWrapper(searchTool, { toolId });
-    const payload = parsePayload(result);
-    schemaCache.set(toolId, payload);
-    return payload;
-  }
-  async function execute(toolId, params) {
-    await discover(toolId);
-    try {
-      return await callWrapper(actionTool, { toolId, params });
-    } catch (error) {
-      if (!isSchemaStale(error)) throw error;
-      // Error 422/code 102 from LingXing explicitly instructs clients to refresh tool list.
-      await refreshWrappers();
-      await discover(toolId, true);
-      return callWrapper(actionTool, { toolId, params });
-    }
-  }
-  async function catalogue(query) {
-    return callWrapper(helpTool, { query, limit: 50, offset: 0 });
-  }
-  return { get tools() { return tools; }, catalogue, discover, execute, refreshWrappers };
-}
-
-export function parsePayload(result) {
-  if (result?.structuredContent && typeof result.structuredContent === 'object') return result.structuredContent;
-  for (const block of result?.content || []) {
-    if (block?.text) {
-      try { return JSON.parse(block.text); } catch { /* ignore non-JSON text blocks */ }
-    }
-  }
-  return result;
-}
-
-export function extractList(result) {
-  const root = parsePayload(result);
-  const candidates = [
-    root?.data?.list,
-    root?.data?.data,
-    root?.data?.data?.list,
-    root?.list,
-    root?.data
-  ];
-  for (const value of candidates) if (Array.isArray(value)) return value;
-  return [];
-}
-
-export function extractTotal(result) {
-  const root = parsePayload(result);
-  return Number(root?.data?.total ?? root?.data?.count ?? root?.total ?? 0);
-}
-
-
-// Admin-only diagnostics: expose only the three gateway wrapper names and descriptions.
-// Business data and authentication material are never included.
-export async function listLingxingTools() {
-  return withLingxingClient(async client => {
-    const tools = (await client.listTools()).tools || [];
-    return tools
-      .filter(tool => ['help', 'search', 'action'].some(suffix =>
-        tool.name === suffix || tool.name.endsWith(`__${suffix}`)
-      ))
-      .map(tool => ({ name: tool.name, description: tool.description || '' }));
-  });
-}
+import {Client} from '@modelcontextprotocol/sdk/client/index.js';
+import {StreamableHTTPClientTransport} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import {config} from './config.js';
+const wait=ms=>new Promise(r=>setTimeout(r,ms));
+export function parseResult(r){if(r?.structuredContent&&typeof r.structuredContent==='object')return r.structuredContent;for(const c of r?.content||[]){if(c.text){try{return JSON.parse(c.text)}catch{}}}return r;}
+function toolBySuffix(tools,s){const a=tools.filter(t=>t.name===s||t.name.endsWith(`__${s}`));if(a.length!==1)throw new Error(`MCP wrapper '${s}' expected once; found ${a.length}`);return a[0];}
+function stale(e){const t=String(e?.message||e).toLowerCase();return t.includes('工具参数定义已更新')||t.includes('刷新工具列表')||t.includes('code\\":102')||t.includes('status: 422')||t.includes('status 422');}
+async function newClient(){const c=new Client({name:'keychron-sales-intelligence',version:'4.0.0'});const t=new StreamableHTTPClientTransport(new URL(config.mcpUrl),{requestInit:{headers:{'X-Mcp-Key':config.mcpKey}}});await c.connect(t);const tools=(await c.listTools()).tools||[];return {c,tools,transport:t};}
+async function call(c,t,args){const r=await c.callTool({name:t.name,arguments:args});await wait(1050);const text=(r.content||[]).map(x=>x.text||'').join('\n');let p=parseResult(r);if(r.isError)throw new Error(`${t.name}: ${text||JSON.stringify(r.content||[])}`);if(p?.success===false||Number(p?.code)===102)throw new Error(`${t.name}: ${JSON.stringify(p)}`);return r;}
+async function oneSession(toolId,params){const {c,tools}=await newClient();try{const help=toolBySuffix(tools,'help'),search=toolBySuffix(tools,'search'),action=toolBySuffix(tools,'action');await call(c,help,{query:toolId,limit:50,offset:0});await call(c,search,{toolId});return await call(c,action,{toolId,params});}finally{await c.close().catch(()=>{});}}
+export async function executeBusinessTool(toolId,params){try{return await oneSession(toolId,params)}catch(e){if(!stale(e))throw e;console.warn(`LingXing schema stale for ${toolId}; creating a new MCP session and rediscovering schema.`);await wait(1500);return await oneSession(toolId,params);}}
+export async function inspectMcp(){const {c,tools}=await newClient();try{return tools.filter(t=>['help','search','action'].some(s=>t.name===s||t.name.endsWith(`__${s}`))).map(t=>({name:t.name,description:t.description||''}));}finally{await c.close().catch(()=>{});}}
+export function listOf(r){const p=parseResult(r);for(const x of [p?.data?.list,p?.data?.data,p?.data?.data?.list,p?.list,p?.data])if(Array.isArray(x))return x;return [];}
+export function totalOf(r){const p=parseResult(r);return Number(p?.data?.total??p?.data?.count??p?.total??0);}

@@ -1,24 +1,41 @@
-# Market Sales Dashboard V3.2 — Full US Catalog
+# Keychron Sales Intelligence V4
 
-This release upgrades the existing V3 app to synchronize the complete Keychron Amazon US Listing catalog, including inactive listings and SKUs with zero sales.
+A clean-room rebuild for four Amazon US LingXing stores, using PostgreSQL, full paginated listing ingestion, sales and FBA inventory snapshots, and password-based partner sessions.
 
-## Important behavior
-- `erp_listing` is paginated using 200-row pages across the configured four US SIDs and brand ID 304. The `status` filter is intentionally omitted so inactive listings are not excluded.
-- `statistics_sales_analysis_list` is paginated using the documented 500-row page size for each US shop and both 7-day and 30-day periods. This prevents products outside a Top-N sample from being incorrectly classified as zero-sales.
-- FBA inventory is paginated with 500-row pages and includes zero-stock rows.
-- The product catalog merges Listing rows with sales rows. Listing-only products remain present with zero sales and `listingStatus` metadata.
-- Partner API returns a strict field allowlist; financial, cost, profit, advertising and supplier fields are not exposed.
+## Important deployment boundary
+V4 is a separate staging deployment. Do not replace the existing V3 service or delete its SQLite Volume. Provision a NEW Railway PostgreSQL service and a NEW V4 application service. Only cut over after real MCP schema tests, four-store reconciliation, partner-auth tests, and data validation pass.
 
-## Deploy to the existing Railway service
-1. Keep the existing Railway service, domain, environment variables and Volume.
-2. Keep `DB_PATH=/app/data/dashboard.sqlite` and the Volume mount `/app/data`.
-3. Replace the repository contents with this release and commit to the existing GitHub repository.
-4. Wait for Railway to build and deploy.
-5. Trigger one admin sync using the existing admin-only endpoint, or wait for the next scheduled sync.
-6. Verify `/api/partner/dashboard` after partner login. `meta.catalogCount`, `meta.zeroSalesCount`, `meta.inactiveCount`, and `meta.sourceRows` show catalog coverage.
+## Environment
+- `LINGXING_MCP_URL` (defaults to LingXing MCP endpoint)
+- `LINGXING_MCP_KEY`
+- `ADMIN_API_KEY`
+- `PARTNER_PASSWORD`
+- `DATABASE_URL` (Railway PostgreSQL reference variable)
+- `US_SHOP_IDS_JSON` defaults to `2177,2178,2179,7178`
+- `BRAND_ID=304`, `MARKET_ID=1`
+- `SYNC_CRON=30 3 * * *`, `SYNC_TIMEZONE=America/Los_Angeles`
 
-## Notes
-- Catalog identity is ASIN + normalized MSKU. Store IDs are retained as associated shop IDs.
-- Amazon US internal sales ranking is not Amazon Best Sellers Rank.
-- Inventory mapping and ghost-SKU aggregation remain conservative; unmatched inventory is `unknown`, not zero stock.
-- Do not commit `.env` files or secrets.
+## Local
+1. Provision PostgreSQL and set `DATABASE_URL`.
+2. `cd backend && npm install`
+3. `cd ../frontend && npm install && npm run build`
+4. `cd ../backend && npm start`
+
+## Sync
+Admin endpoint: `POST /api/admin/sync`, Bearer `ADMIN_API_KEY`.
+Partner login: `POST /api/auth/login` with `{ "password": "..." }`; session cookie is HttpOnly, Secure, SameSite=Lax.
+Partner data: `GET /api/partner/dashboard`.
+Health: `GET /health` (includes PostgreSQL connectivity only).
+
+## Data design
+- `catalog_items`: one row per shop + ASIN/MSKU identity; listings are not filtered by listing status, so inactive and zero-sales products remain represented.
+- `sales_snapshots`: shop- and period-scoped 7/30-day records.
+- `inventory_snapshots`: shop-scoped FBA inventory rows.
+- `sync_runs`: audit trail for each sync.
+- `partner_sessions`: hashed session tokens only.
+
+## MCP reliability
+Each business tool call opens a fresh MCP session, obtains the current wrapper tools, calls `help` and `search` to rediscover the business tool schema, then calls `action`. If LingXing returns its explicit stale-schema 422/code 102 response, V4 opens a new session and retries that read once. It does not blindly retry other errors.
+
+## Caveats before production
+The LingXing MCP business-tool schemas and exact response envelopes are controlled by LingXing and may change. This code must be tested against current live schemas before full sync. It deliberately stops if any configured shop has no listing rows. Verify each shop's returned total against the source ERP before partner launch. FBA inventory aggregation and cross-shop product identity should be reconciled against raw rows; do not interpret unknown stock as zero.
