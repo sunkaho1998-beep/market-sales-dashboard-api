@@ -1,12 +1,15 @@
 
 import crypto from 'node:crypto';
+
 import { config, assertConfig } from './config.js';
+
 import {
   executeBusinessTool,
   listOf,
   totalOf,
   parseResult
 } from './mcp.js';
+
 import {
   saveRunStart,
   finishRun,
@@ -18,10 +21,17 @@ import {
 // US / USD + AU / AUD
 // ==========================================
 
-const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+const wait = ms =>
+  new Promise(resolve => setTimeout(resolve, ms));
 
 const n = value =>
   Number(String(value ?? 0).replaceAll(',', '')) || 0;
+
+const SALES_PAGE_SIZES = [20, 50, 100, 200, 500];
+
+// ==========================================
+// DATE HELPERS
+// ==========================================
 
 function dateAtTz(timezone, date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -31,7 +41,8 @@ function dateAtTz(timezone, date = new Date()) {
     day: '2-digit'
   }).formatToParts(date);
 
-  const get = type => parts.find(p => p.type === type).value;
+  const get = type =>
+    parts.find(part => part.type === type).value;
 
   return `${get('year')}-${get('month')}-${get('day')}`;
 }
@@ -55,42 +66,6 @@ function todayAtShanghai() {
   }).format(new Date());
 }
 
-function extractSellerSku(row) {
-  if (Array.isArray(row.seller_sku)) {
-    return row.seller_sku[0] ?? null;
-  }
-
-  return row.seller_sku ?? row.msku ?? null;
-}
-
-function extractAsin(row) {
-  if (Array.isArray(row.asin)) {
-    return row.asin[0] ?? null;
-  }
-
-  return row.asin ?? null;
-}
-
-function normalizeSales(rows) {
-  return rows.map(row => ({
-    ...row,
-    seller_sku: extractSellerSku(row),
-    asin: extractAsin(row),
-    date1: {
-      ...(row.date1 || {}),
-      volume: n(row.date1?.volume)
-    },
-    date2: {
-      ...(row.date2 || {}),
-      volume: n(row.date2?.volume)
-    }
-  }));
-}
-
-// ==========================================
-// DATE WINDOWS
-// ==========================================
-
 function buildWindows(timezone) {
   const today = dateAtTz(timezone);
   const lastCompleteDay = shift(today, -1);
@@ -106,6 +81,7 @@ function buildWindows(timezone) {
         shift(lastCompleteDay, -7)
       ]
     },
+
     30: {
       current: [
         shift(lastCompleteDay, -29),
@@ -116,6 +92,7 @@ function buildWindows(timezone) {
         shift(lastCompleteDay, -30)
       ]
     },
+
     90: {
       current: [
         shift(lastCompleteDay, -89),
@@ -130,6 +107,78 @@ function buildWindows(timezone) {
 }
 
 // ==========================================
+// NORMALIZATION
+// ==========================================
+
+function firstValue(value) {
+  if (Array.isArray(value)) {
+    return value[0] ?? null;
+  }
+
+  return value ?? null;
+}
+
+function extractSellerSku(row) {
+  return firstValue(row.seller_sku) || row.msku || null;
+}
+
+function extractAsin(row) {
+  return firstValue(row.asin);
+}
+
+function normalizeSales(rows) {
+  return rows.map(row => ({
+    ...row,
+
+    seller_sku: extractSellerSku(row),
+    asin: extractAsin(row),
+
+    date1: {
+      ...(row.date1 || {}),
+      volume: n(row.date1?.volume)
+    },
+
+    date2: {
+      ...(row.date2 || {}),
+      volume: n(row.date2?.volume)
+    }
+  }));
+}
+
+// ==========================================
+// RESPONSE VALIDATION
+// ==========================================
+
+function getPayload(response) {
+  return parseResult(response);
+}
+
+function hasSalesPayload(response) {
+  const p = getPayload(response);
+
+  return (
+    Array.isArray(p?.data?.list) ||
+    Array.isArray(p?.list)
+  );
+}
+
+function assertSuccessfulResponse(response, label) {
+  const p = getPayload(response);
+
+  if (
+    response?.isError ||
+    p?.success === false ||
+    Number(p?.code) === 102
+  ) {
+    throw new Error(
+      `${label}: ${JSON.stringify(p)}`
+    );
+  }
+
+  return p;
+}
+
+// ==========================================
 // GENERIC PAGINATION
 // ==========================================
 
@@ -139,18 +188,30 @@ export async function fetchAllPages(
   pageSize,
   label
 ) {
+  if (!Number.isInteger(pageSize) || pageSize < 1) {
+    throw new Error(`${label}: invalid page size ${pageSize}`);
+  }
+
   let offset = 0;
   let expectedTotal = null;
   let pageCount = 0;
 
   const rows = [];
 
-  while (expectedTotal === null || offset < expectedTotal) {
-    const response = await executeBusinessTool(toolId, {
-      ...baseParams,
-      offset,
-      length: pageSize
-    });
+  while (
+    expectedTotal === null ||
+    offset < expectedTotal
+  ) {
+    const response = await executeBusinessTool(
+      toolId,
+      {
+        ...baseParams,
+        offset,
+        length: pageSize
+      }
+    );
+
+    assertSuccessfulResponse(response, label);
 
     const pageRows = listOf(response);
     const reportedTotal = totalOf(response);
@@ -177,9 +238,8 @@ export async function fetchAllPages(
 
     rows.push(...pageRows);
 
-    if (expectedTotal === null) {
-      if (pageRows.length < pageSize) break;
-    } else if (
+    if (
+      expectedTotal !== null &&
       rows.length < expectedTotal &&
       pageRows.length === 0
     ) {
@@ -189,8 +249,12 @@ export async function fetchAllPages(
       );
     }
 
+    if (pageRows.length === 0) {
+      break;
+    }
+
     if (
-      pageRows.length === 0 ||
+      expectedTotal === null &&
       pageRows.length < pageSize
     ) {
       break;
@@ -217,7 +281,7 @@ export async function fetchAllPages(
 }
 
 // ==========================================
-// VERIFY MARKET STORES
+// MARKET STORE VERIFICATION
 // ==========================================
 
 async function verifyMarketStores(market) {
@@ -226,12 +290,16 @@ async function verifyMarketStores(market) {
     {}
   );
 
-  const p = parseResult(response);
+  const p = assertSuccessfulResponse(
+    response,
+    `${market.code} store verification`
+  );
+
   const sellers = p?.data?.sellers;
 
   if (!Array.isArray(sellers)) {
     throw new Error(
-      `${market.code}: unable to read LingXing seller list`
+      `${market.code}: cannot read data.sellers`
     );
   }
 
@@ -249,7 +317,9 @@ async function verifyMarketStores(market) {
     );
   });
 
-  const ids = actual.map(shop => String(shop.sid));
+  const ids = actual.map(
+    shop => String(shop.sid)
+  );
 
   const missing = [...allowed].filter(
     id => !ids.includes(id)
@@ -266,16 +336,29 @@ async function verifyMarketStores(market) {
     );
   }
 
+  console.log(
+    `[V4] ${market.code} verified stores: ${ids.join(', ')}`
+  );
+
   return ids;
 }
 
 // ==========================================
-// SALES API
+// SALES API PARAMETERS
 // ==========================================
+
+function getSalesPageSize() {
+  const requested = Number(config.salesPageSize);
+
+  return SALES_PAGE_SIZES.includes(requested)
+    ? requested
+    : 200;
+}
 
 function salesParams(market, sid, start, end) {
   return {
     asin_type: 'seller_sku',
+
     date_type: '5',
     start_date: start,
     end_date: end,
@@ -284,7 +367,7 @@ function salesParams(market, sid, start, end) {
 
     sids: String(sid),
     mids: String(market.marketId),
-    bid: config.brandId,
+    bid: String(config.brandId),
 
     stat_field: 'volume',
     sort_field: 'volume',
@@ -301,58 +384,49 @@ function salesParams(market, sid, start, end) {
     currency_code: '',
     search_field: 'seller_sku',
     search_value: [],
+
     parent_asin: '',
     gtag_ids: '',
     cid: ''
   };
 }
 
-function hasSalesPayload(response) {
-  const p = parseResult(response);
-
-  return (
-    Array.isArray(p?.data?.list) ||
-    Array.isArray(p?.list)
-  );
-}
-
-// The sales endpoint can return an asynchronous
-// require_id response before returning the list.
+// ==========================================
+// SALES PAGE
+// One action per page.
+// No repeated creation of the same request.
+// ==========================================
 
 async function fetchSalesPage(params, label) {
-  const attempts = 6;
+  const response = await executeBusinessTool(
+    'statistics_sales_analysis_list',
+    params
+  );
 
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    const response = await executeBusinessTool(
-      'statistics_sales_analysis_list',
-      params
-    );
+  const p = assertSuccessfulResponse(
+    response,
+    label
+  );
 
-    if (hasSalesPayload(response)) {
-      return response;
-    }
-
-    const p = parseResult(response);
-
-    if (
-      response.isError ||
-      p?.success === false ||
-      Number(p?.code) === 102
-    ) {
-      throw new Error(
-        `${label}: sales API error: ${JSON.stringify(p)}`
-      );
-    }
-
-    if (attempt < attempts) {
-      await wait(3000);
-    }
+  if (hasSalesPayload(response)) {
+    return response;
   }
 
+  const requireId =
+    p?.data?.require_id ||
+    p?.require_id ||
+    'not provided';
+
   throw new Error(
-    `${label}: sales list unavailable after 6 attempts.`
+    `${label}: sales list not returned. ` +
+    `require_id=${requireId}. ` +
+    `Response=${JSON.stringify(p)}`
   );
 }
+
+// ==========================================
+// SALES PAGINATION
+// ==========================================
 
 async function fetchAllSalesPages(
   market,
@@ -362,13 +436,22 @@ async function fetchAllSalesPages(
   pageSize,
   label
 ) {
+  if (!SALES_PAGE_SIZES.includes(pageSize)) {
+    throw new Error(
+      `${label}: unsupported sales page size ${pageSize}`
+    );
+  }
+
   let offset = 0;
   let expectedTotal = null;
   let pageCount = 0;
 
   const rows = [];
 
-  while (expectedTotal === null || offset < expectedTotal) {
+  while (
+    expectedTotal === null ||
+    offset < expectedTotal
+  ) {
     const params = salesParams(
       market,
       sid,
@@ -408,9 +491,8 @@ async function fetchAllSalesPages(
 
     rows.push(...pageRows);
 
-    if (expectedTotal === null) {
-      if (pageRows.length < pageSize) break;
-    } else if (
+    if (
+      expectedTotal !== null &&
       rows.length < expectedTotal &&
       pageRows.length === 0
     ) {
@@ -419,8 +501,12 @@ async function fetchAllSalesPages(
       );
     }
 
+    if (pageRows.length === 0) {
+      break;
+    }
+
     if (
-      pageRows.length === 0 ||
+      expectedTotal === null &&
       pageRows.length < pageSize
     ) {
       break;
@@ -446,16 +532,53 @@ async function fetchAllSalesPages(
 }
 
 // ==========================================
-// INVENTORY PAGE SIZE
+// INVENTORY PAGINATION
 // ==========================================
 
 function getStockPageSize() {
   const allowed = [20, 50, 100, 200, 500, 1000];
+
   const requested = Number(config.stockPageSize);
 
   return allowed.includes(requested)
     ? requested
     : 200;
+}
+
+// ==========================================
+// PREVIOUS PERIOD MATCHING
+// ==========================================
+
+function salesKey(row) {
+  return [
+    extractSellerSku(row) || '',
+    extractAsin(row) || ''
+  ].join('|');
+}
+
+function normalizeCurrentSales(currentRows, previousRows) {
+  const previousByKey = new Map();
+
+  for (const row of previousRows) {
+    const key = salesKey(row);
+
+    previousByKey.set(
+      key,
+      n(row.date1?.volume)
+    );
+  }
+
+  return normalizeSales(currentRows).map(row => {
+    const key = salesKey(row);
+
+    return {
+      ...row,
+
+      _previous_units:
+        previousByKey.get(key) ??
+        n(row.date2?.volume)
+    };
+  });
 }
 
 // ==========================================
@@ -467,21 +590,31 @@ async function runMarketSync(market) {
 
   const metrics = {
     scope: `market-${market.code}`,
+
     marketCode: market.code,
     currencyCode: market.currency,
     marketId: market.marketId,
     timezone: market.timezone,
+
     brandId: config.brandId,
+
     shops: {},
+
     startedAt: new Date().toISOString(),
+
     complete: false
   };
 
   let runStarted = false;
 
   try {
-    // Keep startup inside try so one market's
-    // database failure does not abort the other market.
+    console.log(
+      `[V4] Starting ${market.code} synchronization`
+    );
+
+    // --------------------------------------
+    // START RUN
+    // --------------------------------------
 
     await saveRunStart(
       runId,
@@ -491,12 +624,21 @@ async function runMarketSync(market) {
 
     runStarted = true;
 
-    console.log(
-      `[V4] Starting ${market.code} synchronization`
-    );
+    // --------------------------------------
+    // VERIFY SHOPS
+    // --------------------------------------
 
     const ids = await verifyMarketStores(market);
-    const windows = buildWindows(market.timezone);
+
+    const windows = buildWindows(
+      market.timezone
+    );
+
+    const salesPageSize = getSalesPageSize();
+
+    // --------------------------------------
+    // DATA COLLECTION
+    // --------------------------------------
 
     const listings = new Map();
     const sales = [];
@@ -507,16 +649,15 @@ async function runMarketSync(market) {
         `[V4] ${market.code}: processing SID ${sid}`
       );
 
-      // --------------------------------------
+      // ------------------------------------
       // LISTING
-      // Uses the confirmed listing parameters.
-      // --------------------------------------
+      // ------------------------------------
 
       const listing = await fetchAllPages(
         'erp_listing',
         {
           pvi_ids: '',
-          sids: sid,
+          sids: String(sid),
           search_field: 'msku',
           exact_search: '0'
         },
@@ -539,18 +680,22 @@ async function runMarketSync(market) {
         listingComplete: listing.complete
       };
 
-      // --------------------------------------
-      // SALES: 7 / 30 / 90 DAYS
-      // --------------------------------------
+      // ------------------------------------
+      // SALES 7 / 30 / 90 DAYS
+      // ------------------------------------
 
       for (const period of [7, 30, 90]) {
         const range = windows[period];
+
+        console.log(
+          `[V4] ${market.code} SID ${sid}: sales ${period}D`
+        );
 
         const current = await fetchAllSalesPages(
           market,
           sid,
           ...range.current,
-          config.salesPageSize,
+          salesPageSize,
           `Sales ${market.code} ${period}D current SID ${sid}`
         );
 
@@ -558,26 +703,14 @@ async function runMarketSync(market) {
           market,
           sid,
           ...range.previous,
-          config.salesPageSize,
+          salesPageSize,
           `Sales ${market.code} ${period}D previous SID ${sid}`
         );
 
-        const previousByKey = new Map(
-          previous.rows.map(row => [
-            `${extractSellerSku(row) || ''}|${extractAsin(row) || ''}`,
-            n(row.date1?.volume)
-          ])
+        const normalized = normalizeCurrentSales(
+          current.rows,
+          previous.rows
         );
-
-        const normalized = normalizeSales(
-          current.rows
-        ).map(row => ({
-          ...row,
-          _previous_units:
-            previousByKey.get(
-              `${row.seller_sku || ''}|${row.asin || ''}`
-            ) ?? n(row.date2?.volume)
-        }));
 
         sales.push([
           sid,
@@ -588,21 +721,27 @@ async function runMarketSync(market) {
         metrics.shops[sid][`sales${period}Rows`] =
           current.rows.length;
 
+        metrics.shops[sid][`sales${period}Total`] =
+          current.total;
+
         metrics.shops[sid][`sales${period}Pages`] =
           current.pages;
 
         metrics.shops[sid][`sales${period}PreviousRows`] =
           previous.rows.length;
+
+        metrics.shops[sid][`sales${period}Complete`] =
+          current.complete && previous.complete;
       }
 
-      // --------------------------------------
+      // ------------------------------------
       // FBA INVENTORY
-      // --------------------------------------
+      // ------------------------------------
 
       const stock = await fetchAllPages(
         'get_fba_stock_list',
         {
-          sid,
+          sid: String(sid),
           search_field: 'sku',
           fulfillment_channel_type: 'FBA',
           is_hide_zero_stock: '0',
@@ -618,6 +757,9 @@ async function runMarketSync(market) {
       metrics.shops[sid].inventoryRows =
         stock.rows.length;
 
+      metrics.shops[sid].inventoryReportedTotal =
+        stock.total;
+
       metrics.shops[sid].inventoryPages =
         stock.pages;
 
@@ -625,12 +767,15 @@ async function runMarketSync(market) {
         stock.complete;
     }
 
-    // ----------------------------------------
-    // VALIDATE COMPLETE MARKET DATA
-    // ----------------------------------------
+    // --------------------------------------
+    // VALIDATE MARKET DATA
+    // --------------------------------------
 
     const listingRows = [...listings.values()]
-      .reduce((sum, rows) => sum + rows.length, 0);
+      .reduce(
+        (sum, rows) => sum + rows.length,
+        0
+      );
 
     if (!listingRows) {
       throw new Error(
@@ -638,30 +783,37 @@ async function runMarketSync(market) {
       );
     }
 
-    metrics.listingRows = listingRows;
-
-    metrics.uniqueShopSku = new Set(
+    const uniqueShopSku = new Set(
       [...listings.entries()].flatMap(([sid, rows]) =>
         rows.map(row =>
           `${sid}|${row.asin || ''}|${row.msku || ''}`
         )
       )
-    ).size;
+    );
 
-    metrics.uniqueAsins = new Set(
+    const uniqueAsins = new Set(
       [...listings.values()]
         .flat()
-        .map(row => row.asin)
+        .map(row => firstValue(row.asin))
         .filter(Boolean)
-    ).size;
+    );
 
-    metrics.salesRows = sales.reduce(
+    const salesRows = sales.reduce(
       (sum, entry) => sum + entry[2].length,
       0
     );
 
-    metrics.inventoryRows = [...stocks.values()]
-      .reduce((sum, rows) => sum + rows.length, 0);
+    const inventoryRows = [...stocks.values()]
+      .reduce(
+        (sum, rows) => sum + rows.length,
+        0
+      );
+
+    metrics.listingRows = listingRows;
+    metrics.uniqueShopSku = uniqueShopSku.size;
+    metrics.uniqueAsins = uniqueAsins.size;
+    metrics.salesRows = salesRows;
+    metrics.inventoryRows = inventoryRows;
 
     metrics.zeroSalesListingCandidates = [
       ...listings.values()
@@ -673,11 +825,9 @@ async function runMarketSync(market) {
     metrics.complete = true;
     metrics.windows = windows;
 
-    // ----------------------------------------
+    // --------------------------------------
     // SAVE MARKET SNAPSHOT
-    // New db.js argument order:
-    // runId, listings, sales, stocks, market, currency
-    // ----------------------------------------
+    // --------------------------------------
 
     await replaceRunData(
       runId,
@@ -702,6 +852,7 @@ async function runMarketSync(market) {
       ok: true,
       runId,
       marketCode: market.code,
+      currencyCode: market.currency,
       metrics
     };
 
@@ -721,6 +872,7 @@ async function runMarketSync(market) {
           metrics,
           error.message
         );
+
       } catch (dbError) {
         console.error(
           `[V4] ${market.code} failed to record error status:`,
@@ -733,6 +885,7 @@ async function runMarketSync(market) {
       ok: false,
       runId,
       marketCode: market.code,
+      currencyCode: market.currency,
       error: error.message,
       metrics
     };
@@ -761,8 +914,8 @@ export async function runFullSync(marketCode = null) {
 
   const results = [];
 
-  // Sequential execution prevents overlapping
-  // market jobs from competing for the MCP connection.
+  // Run markets sequentially.
+  // A failure in one market does not stop the next market.
 
   for (const market of selectedMarkets) {
     const result = await runMarketSync(market);
@@ -777,8 +930,12 @@ export async function runFullSync(marketCode = null) {
 
   return {
     ok: failed === 0,
-    partialSuccess: successful > 0 && failed > 0,
+
+    partialSuccess:
+      successful > 0 && failed > 0,
+
     markets: results,
+
     summary: {
       total: results.length,
       successful,
