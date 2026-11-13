@@ -42,3 +42,19 @@ test('normalizes SKU punctuation for lookup and detects Amazon ghost rows', () =
   assert.equal(__test__.normSku('k8-a1'), 'K8A1');
   assert.equal(__test__.isGhost('amzn.gr.K8A1-LN'), true);
 });
+
+test('keeps every listing in the full catalog, including inactive zero-sales SKUs', () => {
+  const payload = normalizeDashboard({
+    generatedAt: '2026-11-12T00:00:00.000Z', period: {},
+    sales7Rows: [], sales30Rows: [],
+    listingRows: [
+      { asin: 'B0CATALOG1', msku: 'ACTIVE-01', local_sku: 'LOCAL-01', local_name: 'Active Keyboard', status: '1', status_text: 'Active', sid: 2177 },
+      { asin: 'B0CATALOG2', msku: 'INACTIVE-01', local_sku: 'LOCAL-02', local_name: 'Inactive Mouse', status: '0', status_text: 'Inactive', sid: 2178 }
+    ], stockRows: []
+  });
+  assert.equal(payload.items.length, 2);
+  assert.equal(payload.items.find(x => x.asin === 'B0CATALOG1').sales30, 0);
+  assert.equal(payload.items.find(x => x.asin === 'B0CATALOG2').listingStatus, 'Inactive');
+  assert.equal(payload.meta.zeroSalesCount, 2);
+  assert.equal(payload.meta.inactiveCount, 1);
+});

@@ -3,7 +3,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { config } from './config.js';
 
 export async function withLingxingClient(fn) {
-  const client = new Client({ name: 'keychron-partner-dashboard', version: '2.0.0' });
+  const client = new Client({ name: 'keychron-partner-dashboard', version: '3.2.0' });
   const transport = new StreamableHTTPClientTransport(new URL(config.mcpUrl), {
     requestInit: { headers: { 'X-Mcp-Key': config.mcpKey } }
   });

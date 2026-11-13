@@ -35,7 +35,9 @@ export function normalizeDashboard({ sales7Rows, sales30Rows, listingRows, stock
       title: clean(row.local_name ?? row.item_name ?? row.product_name) || null,
       imageUrl: clean(row.small_image_url) || null,
       category: clean(row.category_text ?? row.category) || 'Other',
-      sid: String(row.sid ?? row.store_id ?? '')
+      sid: String(row.sid ?? row.store_id ?? ''),
+      listingStatus: clean(row.status_text) || (String(row.status ?? '') === '1' ? 'Active' : String(row.status ?? '') === '0' ? 'Inactive' : 'Unknown'),
+      rawStatus: row.status ?? null
     };
     if (asin) listingByAsin.set(asin, item);
     if (msku) listingByMsku.set(`${item.sid}|${normSku(msku)}`, item);
@@ -88,6 +90,33 @@ export function normalizeDashboard({ sales7Rows, sales30Rows, listingRows, stock
     stockByAsin.set(asin, bucket);
   }
 
+  // Full catalog merge: every Listing is represented even when it has no sales row.
+  // Identity is ASIN + normalized MSKU so distinct variants remain separate; store IDs are retained.
+  for (const row of listingRows) {
+    const asin = clean(row.asin);
+    const msku = clean(row.msku);
+    const sid = String(row.sid ?? row.store_id ?? '');
+    if (!asin && !msku) continue;
+    const key = `${asin || ''}|${normSku(msku)}`;
+    const existing = salesMap.get(key);
+    if (existing) {
+      existing.shopIds.add(sid);
+      if (!existing.title) existing.title = clean(row.local_name ?? row.item_name ?? row.product_name) || null;
+      if (!existing.imageUrl) existing.imageUrl = clean(row.small_image_url) || null;
+      continue;
+    }
+    salesMap.set(key, {
+      key, asin: asin || null, sellerSku: msku || null,
+      sales7: 0, previousSales7: 0, sales30: 0, previousSales30: 0,
+      shopIds: new Set([sid]),
+      title: clean(row.local_name ?? row.item_name ?? row.product_name) || msku || asin,
+      imageUrl: clean(row.small_image_url) || null,
+      category: clean(row.category_text ?? row.category) || 'Other',
+      listingStatus: clean(row.status_text) || (String(row.status ?? '') === '1' ? 'Active' : String(row.status ?? '') === '0' ? 'Inactive' : 'Unknown'),
+      rawStatus: row.status ?? null
+    });
+  }
+
   const items = [...salesMap.values()].map(s => {
     const listing = listingByAsin.get(s.asin) || [...s.shopIds].map(id => listingByMsku.get(`${id}|${normSku(s.sellerSku)}`)).find(Boolean);
     const stock = stockByAsin.get(s.asin);
@@ -104,6 +133,7 @@ export function normalizeDashboard({ sales7Rows, sales30Rows, listingRows, stock
       title: listing?.title || s.title || s.sellerSku || s.asin,
       imageUrl: listing?.imageUrl || s.imageUrl || null,
       category: listing?.category || s.category || 'Other',
+      listingStatus: listing?.listingStatus || s.listingStatus || 'Unknown',
       sales7: s.sales7,
       sales30: s.sales30,
       previousSales7: s.previousSales7,
@@ -137,6 +167,9 @@ export function normalizeDashboard({ sales7Rows, sales30Rows, listingRows, stock
       marketplace: 'Amazon US', marketplaceId: 'ATVPDKIKX0DER',
       shopIds: ['2177', '2178', '2179', '7178'], timezone: 'America/Los_Angeles',
       generatedAt, period, isMock: false,
+      catalogCount: items.length,
+      zeroSalesCount: items.filter(item => item.sales7 === 0 && item.sales30 === 0).length,
+      inactiveCount: items.filter(item => item.listingStatus === 'Inactive').length,
       rankingDefinition: 'Keychron US internal sales ranking; not Amazon Best Sellers Rank'
     },
     items

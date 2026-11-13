@@ -69,7 +69,7 @@ app.get('/api/partner/dashboard', partnerAuth, (_req, res) => {
   if (!snapshot) return res.status(503).json({ error: 'No successful data snapshot yet', status: latestStatus() });
   const items = snapshot.payload.items.map(x => ({
     id:x.id, sku:x.sku, localSku:x.localSku, asin:x.asin, title:x.title, imageUrl:x.imageUrl,
-    category:x.category, sales7:x.sales7, sales30:x.sales30,
+    category:x.category, listingStatus:x.listingStatus, sales7:x.sales7, sales30:x.sales30,
     previousSales7:x.previousSales7, previousSales30:x.previousSales30,
     salesGrowth7:x.salesGrowth7, salesGrowth30:x.salesGrowth30,
     availableStock:x.availableStock, reservedStock:x.reservedStock, dailyVelocity:x.dailyVelocity,
@@ -81,7 +81,7 @@ app.get('/api/partner/dashboard', partnerAuth, (_req, res) => {
     source: sourceMeta.source, brand: sourceMeta.brand, marketplace: sourceMeta.marketplace,
     timezone: sourceMeta.timezone, generatedAt: sourceMeta.generatedAt, period: sourceMeta.period,
     isMock: false, rankingDefinition: sourceMeta.rankingDefinition, shopNames: sourceMeta.shopNames,
-    sourceRows: sourceMeta.sourceRows
+    sourceRows: sourceMeta.sourceRows, catalogCount: sourceMeta.catalogCount, zeroSalesCount: sourceMeta.zeroSalesCount, inactiveCount: sourceMeta.inactiveCount, catalogScope: sourceMeta.catalogScope
   }, items, lastSuccessfulSync: snapshot.createdAt });
 });
 app.get('/api/partner/status', partnerAuth, (_req,res) => {

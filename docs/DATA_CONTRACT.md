@@ -1,49 +1,15 @@
-# V3 partner data contract
+# V3.2 Partner Data Contract
 
-## Login
-`POST /api/auth/login` JSON `{ "password": "..." }`.
-Success returns `{ "ok": true, "expiresAt": "..." }` and sets an HttpOnly secure session cookie. Incorrect passwords return 401; excessive attempts return 429.
+`GET /api/partner/dashboard` requires a valid partner session cookie.
 
-`GET /api/auth/me` requires the session cookie and returns `{ "authenticated": true }`.
-`POST /api/auth/logout` revokes the session and clears the cookie.
+Response:
+- `meta.generatedAt`: snapshot generation time
+- `meta.catalogCount`: number of normalized catalog entries
+- `meta.zeroSalesCount`: entries with 0 units in both 7-day and 30-day windows
+- `meta.inactiveCount`: entries whose Listing status is inactive
+- `meta.sourceRows`: counts and pagination metadata for sales, Listing and inventory source rows
+- `items[]`: product catalog entries
 
-## Dashboard
-`GET /api/partner/dashboard` requires a valid session cookie and returns:
+Each item includes only partner-safe fields: `id`, `sku`, `localSku`, `asin`, `title`, `imageUrl`, `category`, `listingStatus`, `sales7`, `sales30`, previous-period sales, growth percentages, available/reserved stock, daily velocity, days of cover, stock status and rank fields.
 
-```json
-{
-  "meta": {
-    "source": "LingXing MCP",
-    "brand": "Keychron",
-    "marketplace": "Amazon US",
-    "timezone": "America/Los_Angeles",
-    "generatedAt": "ISO-8601",
-    "isMock": false,
-    "rankingDefinition": "Keychron US internal sales ranking; not Amazon Best Sellers Rank"
-  },
-  "items": [
-    {
-      "id": "ASIN-or-stable-key",
-      "sku": "seller SKU",
-      "localSku": "local SKU",
-      "asin": "ASIN",
-      "title": "Product title",
-      "imageUrl": "https://...",
-      "category": "Keyboard",
-      "sales7": 10,
-      "sales30": 42,
-      "previousSales7": 8,
-      "previousSales30": 39,
-      "availableStock": 15,
-      "daysOfCover": 10.7,
-      "status": "low",
-      "rank": 1,
-      "previousRank": 2,
-      "rankChange": 1
-    }
-  ],
-  "lastSuccessfulSync": "ISO-8601"
-}
-```
-
-Only allowlisted product, sales and stock fields are exposed. Financial and internal procurement fields are excluded.
+No cost, purchase price, profit, advertising spend, supplier, or internal procurement fields are returned.
