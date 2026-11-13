@@ -11,4 +11,4 @@ async function oneSession(toolId,params){const {c,tools}=await newClient();try{c
 export async function executeBusinessTool(toolId,params){try{return await oneSession(toolId,params)}catch(e){if(!stale(e))throw e;console.warn(`LingXing schema stale for ${toolId}; creating a new MCP session and rediscovering schema.`);await wait(1500);return await oneSession(toolId,params);}}
 export async function inspectMcp(){const {c,tools}=await newClient();try{return tools.filter(t=>['help','search','action'].some(s=>t.name===s||t.name.endsWith(`__${s}`))).map(t=>({name:t.name,description:t.description||''}));}finally{await c.close().catch(()=>{});}}
 export function listOf(r){const p=parseResult(r);for(const x of [p?.data?.list,p?.data?.data,p?.data?.data?.list,p?.list,p?.data])if(Array.isArray(x))return x;return [];}
-export function totalOf(r){const p=parseResult(r);return Number(p?.data?.total??p?.data?.count??p?.total??0);}
+export function totalOf(r){const p=parseResult(r);return Number(p?.data?.data?.total??p?.data?.total??p?.data?.count??p?.total??0);}
