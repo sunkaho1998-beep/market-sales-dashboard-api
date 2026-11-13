@@ -22,39 +22,71 @@ function findTool(tools, suffix) {
 }
 
 export async function createLingxingGateway(client) {
-  const tools = (await client.listTools()).tools || [];
-  const helpTool = findTool(tools, 'help');
-  const searchTool = findTool(tools, 'search');
-  const actionTool = findTool(tools, 'action');
+  let tools = (await client.listTools()).tools || [];
+  let helpTool = findTool(tools, 'help');
+  let searchTool = findTool(tools, 'search');
+  let actionTool = findTool(tools, 'action');
   const schemaCache = new Map();
 
+  const pause = () => new Promise(resolve => setTimeout(resolve, 1100));
+  function errorText(error) {
+    const parts = [error?.message, error?.stack];
+    if (error?.content) parts.push(JSON.stringify(error.content));
+    if (error?.cause) parts.push(JSON.stringify(error.cause));
+    return parts.filter(Boolean).join(' ');
+  }
+  function isSchemaStale(error) {
+    const text = errorText(error).toLowerCase();
+    return text.includes('工具参数定义已更新') ||
+      text.includes('刷新工具列表') ||
+      text.includes('schema has changed') ||
+      text.includes('tool schema') && text.includes('updated') ||
+      text.includes('status: 422') || text.includes('status 422');
+  }
+  async function refreshWrappers() {
+    // LingXing can invalidate cached tool definitions while the MCP connection remains open.
+    // Refresh the advertised wrapper list before rediscovering the business tool schema.
+    tools = (await client.listTools()).tools || [];
+    helpTool = findTool(tools, 'help');
+    searchTool = findTool(tools, 'search');
+    actionTool = findTool(tools, 'action');
+    schemaCache.clear();
+  }
   async function callWrapper(tool, args) {
     const result = await client.callTool({ name: tool.name, arguments: args });
+    await pause(); // respect LingXing QPS=1
     if (result.isError) throw new Error(`${tool.name} failed: ${JSON.stringify(result.content || [])}`);
-    await new Promise(resolve => setTimeout(resolve, 1100)); // respect LingXing QPS=1
+    const payload = parsePayload(result);
+    if (payload?.success === false || payload?.code === 102) {
+      throw new Error(`${tool.name} failed: ${JSON.stringify(payload)}`);
+    }
     return result;
   }
-
-  async function discover(toolId) {
-    if (schemaCache.has(toolId)) return schemaCache.get(toolId);
-    // Follow the actual three-layer gateway: help discovers, search retrieves schema, action executes.
+  async function discover(toolId, force = false) {
+    if (!force && schemaCache.has(toolId)) return schemaCache.get(toolId);
+    // Always rediscover the business tool through help -> search; forced refresh bypasses cache.
     await callWrapper(helpTool, { query: toolId, limit: 50, offset: 0 });
     const result = await callWrapper(searchTool, { toolId });
     const payload = parsePayload(result);
     schemaCache.set(toolId, payload);
     return payload;
   }
-
   async function execute(toolId, params) {
     await discover(toolId);
-    return callWrapper(actionTool, { toolId, params });
+    try {
+      return await callWrapper(actionTool, { toolId, params });
+    } catch (error) {
+      if (!isSchemaStale(error)) throw error;
+      // Error 422/code 102 from LingXing explicitly instructs clients to refresh tool list.
+      await refreshWrappers();
+      await discover(toolId, true);
+      return callWrapper(actionTool, { toolId, params });
+    }
   }
-
   async function catalogue(query) {
     return callWrapper(helpTool, { query, limit: 50, offset: 0 });
   }
-
-  return { tools, catalogue, discover, execute };
+  return { get tools() { return tools; }, catalogue, discover, execute, refreshWrappers };
 }
 
 export function parsePayload(result) {
