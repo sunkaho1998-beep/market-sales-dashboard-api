@@ -367,7 +367,7 @@ function salesParams(market, sid, start, end) {
 
     sids: String(sid),
     mids: String(market.marketId),
-    bid: String(config.brandId),
+  
 
     stat_field: 'volume',
     sort_field: 'volume',
