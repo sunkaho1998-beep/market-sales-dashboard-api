@@ -1,1127 +1,1315 @@
 
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap');
+import React, { useEffect, useMemo, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import {
+  LayoutDashboard, Package, Star, GitCompare, TrendingUp,
+  RefreshCw, FileText, Settings, Search, LogOut, Languages,
+  Globe, Flag, Menu, X, AlertTriangle, Boxes, Activity,
+  ArrowUpRight, Warehouse, PackageX, CircleAlert, ChevronRight, BarChart3
+} from 'lucide-react';
+import {
+  BarChart, Bar, XAxis, YAxis, Tooltip,
+  ResponsiveContainer, CartesianGrid
+} from 'recharts';
+import './style.css';
 
-:root {
-  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  color: #182435;
-  background: #f4f7fb;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
+const WATCH_KEY = 'keychron-v42-watchlist';
+const LANG_KEY = 'dash-lang';
+
+const TEXT = {
+  en: {
+    brand: 'GLOBAL OPERATIONS INTELLIGENCE',
+    markets: 'MARKETS',
+    overviewGroup: 'OVERVIEW',
+    productsGroup: 'PRODUCT MANAGEMENT',
+    systemGroup: 'SYSTEM',
+    us: 'United States',
+    au: 'Australia',
+    global: 'Global Overview',
+    catalog: 'Product Catalog',
+    watchlist: 'Product Watchlist',
+    compare: 'Product Comparison',
+    sync: 'Sync Center',
+    logs: 'Sync Logs',
+    settings: 'Settings & Permissions',
+    overview: 'Business overview',
+    marketOverview: 'Market Overview',
+    products: 'Products',
+    listings: 'Listings',
+    sales7: '7D Sales',
+    sales30: '30D Sales',
+    sales90: '90D Sales',
+    growth7: '7D Growth',
+    growth30: '30D Growth',
+    growth90: '90D Growth',
+    average: 'Daily Average · 30D',
+    available: 'FBA Available',
+    reserved: 'Reserved Stock',
+    alerts: 'Inventory Alerts',
+    zeroSales: 'Zero Sales',
+    lowStock: 'Low Stock',
+    stockout: 'Out of Stock',
+    healthy: 'Healthy',
+    unknown: 'Unknown',
+    salesPerformance: 'Sales Performance',
+    salesTrend: 'Sales & Growth Analysis',
+    productPerformance: 'Product Performance',
+    topProducts: 'Top Products by 30D Sales',
+    inventoryHealth: 'Inventory Health',
+    inventoryCoverage: 'Inventory Coverage',
+    daysCover: 'Days of Cover',
+    search: 'Search SKU, ASIN or product name',
+    category: 'Category',
+    allCategories: 'All Categories',
+    keyboard: 'Keyboards',
+    mouse: 'Mice',
+    accessories: 'Accessories',
+    status: 'Status',
+    allStatuses: 'All Statuses',
+    active: 'Active',
+    inactive: 'Inactive',
+    zero: 'Zero Sales',
+    product: 'Product',
+    sku: 'Seller SKU',
+    asin: 'ASIN',
+    sales: 'Sales',
+    actions: 'Actions',
+    addWatch: 'Add to Watchlist',
+    removeWatch: 'Remove',
+    addCompare: 'Add to Comparison',
+    selected: 'Selected Products',
+    noWatch: 'No products in your watchlist.',
+    noCompare: 'No products selected.',
+    compareHint: 'Select up to five products from the catalog.',
+    compareLimit: 'Maximum five products can be compared.',
+    clear: 'Clear',
+    period: 'Period',
+    sevenDays: '7 Days',
+    thirtyDays: '30 Days',
+    ninetyDays: '90 Days',
+    updated: 'Last Successful Sync',
+    refresh: 'Refresh',
+    loading: 'Loading data...',
+    noData: 'No matching products.',
+    unavailable: 'Market data unavailable.',
+    syncStatus: 'Synchronization Status',
+    success: 'Successful',
+    failed: 'Failed',
+    running: 'Running',
+    notSynced: 'Not Synced',
+    syncNote: 'Synchronization is managed through the protected administrator workflow.',
+    login: 'Partner Access',
+    password: 'Enter access password',
+    signIn: 'Sign In',
+    signOut: 'Sign Out',
+    loginError: 'Login failed',
+    language: 'Language',
+    currency: 'Currency',
+    units: 'Units sold, not revenue.',
+    globalNote: 'US and AU are reported independently. USD and AUD are never combined.',
+    watchSaved: 'Saved in this browser.',
+    market: 'Market',
+    rank: 'Rank',
+    listingStatus: 'Listing Status',
+    noInventory: 'Inventory data unavailable',
+    previous: 'Previous Period',
+    rising: 'Rising Products',
+    stable: 'Stable High-sellers',
+    revival: 'Potential Revival',
+    declining: 'Declining Products',
+    footer: 'Internal Keychron operations data. Markets and currencies remain separate.'
+  },
+  zh: {
+    brand: '全球运营管理中心',
+    markets: '市场',
+    overviewGroup: '经营总览',
+    productsGroup: '商品管理',
+    systemGroup: '系统管理',
+    us: '美国站',
+    au: '澳洲站',
+    global: '全球经营总览',
+    catalog: '商品目录',
+    watchlist: '重点关注商品',
+    compare: '商品对比',
+    sync: '同步中心',
+    logs: '同步日志',
+    settings: '设置与权限',
+    overview: '整体经营情况',
+    marketOverview: '市场经营总览',
+    products: '商品数量',
+    listings: 'Listing 数量',
+    sales7: '7天销量',
+    sales30: '30天销量',
+    sales90: '90天销量',
+    growth7: '7天增长率',
+    growth30: '30天增长率',
+    growth90: '90天增长率',
+    average: '近30天日均销量',
+    available: 'FBA可售库存',
+    reserved: '预留库存',
+    alerts: '库存预警',
+    zeroSales: '零销量商品',
+    lowStock: '低库存',
+    stockout: '缺货',
+    healthy: '库存健康',
+    unknown: '未知',
+    salesPerformance: '销售表现',
+    salesTrend: '销量与增长分析',
+    productPerformance: '商品表现分析',
+    topProducts: '30天销量排行榜',
+    inventoryHealth: '库存健康度',
+    inventoryCoverage: '库存覆盖情况',
+    daysCover: '库存覆盖天数',
+    search: '搜索 SKU、ASIN 或商品名称',
+    category: '商品分类',
+    allCategories: '全部分类',
+    keyboard: '键盘',
+    mouse: '鼠标',
+    accessories: '配件',
+    status: '商品状态',
+    allStatuses: '全部状态',
+    active: '在售',
+    inactive: '停售',
+    zero: '零销量',
+    product: '商品',
+    sku: 'Seller SKU',
+    asin: 'ASIN',
+    sales: '销量',
+    actions: '操作',
+    addWatch: '加入关注',
+    removeWatch: '移除',
+    addCompare: '加入对比',
+    selected: '已选商品',
+    noWatch: '暂无关注商品。',
+    noCompare: '尚未选择对比商品。',
+    compareHint: '请从商品目录选择最多五个商品。',
+    compareLimit: '最多同时对比五个商品。',
+    clear: '清空',
+    period: '统计周期',
+    sevenDays: '7天',
+    thirtyDays: '30天',
+    ninetyDays: '90天',
+    updated: '最近成功同步',
+    refresh: '刷新数据',
+    loading: '正在加载数据…',
+    noData: '没有符合条件的商品。',
+    unavailable: '该市场暂无可用数据。',
+    syncStatus: '同步状态',
+    success: '同步成功',
+    failed: '同步失败',
+    running: '同步中',
+    notSynced: '尚未同步',
+    syncNote: '同步操作由受保护的管理员流程管理。',
+    login: '合作伙伴登录',
+    password: '请输入访问密码',
+    signIn: '登录',
+    signOut: '退出登录',
+    loginError: '登录失败',
+    language: '语言',
+    currency: '报表币种',
+    units: '销量单位，不代表销售额。',
+    globalNote: '美国与澳洲分别统计，USD 与 AUD 不直接相加。',
+    watchSaved: '关注清单保存在当前浏览器。',
+    market: '市场',
+    rank: '排名',
+    listingStatus: 'Listing状态',
+    noInventory: '暂无库存数据',
+    previous: '上一周期',
+    rising: '增长商品',
+    stable: '稳定畅销商品',
+    revival: '潜力复苏商品',
+    declining: '下滑商品',
+    footer: 'Keychron 内部运营数据 · 市场与币种独立统计。'
+  }
+};
+
+const fmt = value => {
+  if (value === null || value === undefined || value === '') return '—';
+  return Number(value).toLocaleString('en-US', {
+    maximumFractionDigits: 1
+  });
+};
+
+const pct = value => {
+  if (value === null || value === undefined) return '—';
+  const n = Number(value);
+  return `${n > 0 ? '+' : ''}${n.toFixed(2)}%`;
+};
+
+const safeArray = value => Array.isArray(value) ? value : [];
+
+function Login({ lang, setLang, onLogin }) {
+  const t = TEXT[lang];
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function submit(e) {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || t.loginError);
+      }
+
+      onLogin();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="login-wrap">
+      <form className="login-card" onSubmit={submit}>
+        <div className="brandmark">K</div>
+        <div className="topline">
+          <span>KEYCHRON</span>
+          <button
+            type="button"
+            className="lang"
+            onClick={() => setLang(lang === 'en' ? 'zh' : 'en')}
+          >
+            <Languages size={15}/>
+            {lang.toUpperCase()}
+          </button>
+        </div>
+        <h1>{t.login}</h1>
+        <p>Global Operations Intelligence · V4.2</p>
+        <label>{t.password}</label>
+        <input
+          type="password"
+          autoComplete="current-password"
+          value={password}
+          onChange={e => setPassword(e.target.value)}
+          required
+        />
+        <button className="primary" disabled={busy}>
+          {busy ? '…' : t.signIn}
+        </button>
+        {error && <div className="error">{error}</div>}
+        <small>Authorised partner access only.</small>
+      </form>
+    </main>
+  );
 }
 
-* { box-sizing: border-box; }
+function Metric({ label, value, icon: Icon, growth, tone = 'blue' }) {
+  const positive = Number(growth) >= 0;
 
-body {
-  margin: 0;
-  min-width: 320px;
-  background: #f4f7fb;
+  return (
+    <article className="metric-card">
+      <div className={`metric-icon ${tone}`}>
+        <Icon size={19}/>
+      </div>
+      <div className="metric-copy">
+        <span>{label}</span>
+        <strong>{fmt(value)}</strong>
+        {growth !== undefined && growth !== null && (
+          <small className={positive ? 'growth-positive' : 'growth-negative'}>
+            {pct(growth)}
+          </small>
+        )}
+      </div>
+    </article>
+  );
 }
 
-button, input, select { font: inherit; }
-button { cursor: pointer; }
-button:disabled { cursor: not-allowed; opacity: .55; }
+function ProductTable({
+  items,
+  t,
+  watched,
+  compared,
+  onWatch,
+  onCompare
+}) {
+  if (!items.length) {
+    return (
+      <div className="empty-state">
+        <Package size={28}/>
+        <strong>{t.noData}</strong>
+      </div>
+    );
+  }
 
-.app-shell { min-height: 100vh; }
+  return (
+    <div className="table-wrap">
+      <table className="data-table">
+        <thead>
+          <tr>
+            <th>{t.product}</th>
+            <th>{t.asin}</th>
+            <th>{t.sales7}</th>
+            <th>{t.sales30}</th>
+            <th>{t.sales90}</th>
+            <th>{t.available}</th>
+            <th>{t.reserved}</th>
+            <th>{t.daysCover}</th>
+            <th>{t.status}</th>
+            <th>{t.actions}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map(item => {
+            const key = `${item.marketCode || 'US'}|${item.asin || item.id}`;
 
-/* SIDEBAR */
+            const skuList = [
+              ...safeArray(item.sellerSkus),
+              ...(item.sku ? [item.sku] : [])
+            ];
+            const uniqueSkus = [...new Set(skuList)];
 
-.sidebar {
-  position: fixed;
-  inset: 0 auto 0 0;
-  width: 258px;
-  background: #17283d;
-  color: #eaf1f8;
-  display: flex;
-  flex-direction: column;
-  z-index: 20;
+            return (
+              <tr key={key}>
+                <td>
+                  <div className="product-cell">
+                    <div className="product-thumb">
+                      {item.imageUrl
+                        ? <img src={item.imageUrl} alt="" onError={e => {
+                            e.currentTarget.style.display = 'none';
+                          }}/>
+                        : <Package size={18}/>
+                      }
+                    </div>
+                    <div className="product-name">
+                      <strong>{item.title || uniqueSkus[0] || item.asin}</strong>
+                      <span>
+                        {uniqueSkus.slice(0, 2).join(', ') || '—'}
+                        {uniqueSkus.length > 2 ? ` +${uniqueSkus.length - 2}` : ''}
+                      </span>
+                    </div>
+                  </div>
+                </td>
+                <td>{item.asin || '—'}</td>
+                <td className="numeric">{fmt(item.sales7)}</td>
+                <td className="numeric">{fmt(item.sales30)}</td>
+                <td className="numeric">{fmt(item.sales90)}</td>
+                <td className="numeric">{fmt(item.availableStock)}</td>
+                <td className="numeric">{fmt(item.reservedStock)}</td>
+                <td className="numeric">
+                  {item.daysOfCover == null ? '—' : `${fmt(item.daysOfCover)}d`}
+                </td>
+                <td>
+                  <span className={`status-pill ${item.status || 'unknown'}`}>
+                    {item.status === 'healthy' ? t.healthy :
+                      item.status === 'low' ? t.lowStock :
+                      item.status === 'stockout' ? t.stockout :
+                      item.status === 'no_sales' ? t.zeroSales : t.unknown}
+                  </span>
+                </td>
+                <td>
+                  <div className="row-actions">
+                    <button
+                      className={watched.has(key) ? 'mini-action selected' : 'mini-action'}
+                      title={t.addWatch}
+                      onClick={() => onWatch(key, item)}
+                    >
+                      <Star size={15} fill={watched.has(key) ? 'currentColor' : 'none'}/>
+                    </button>
+                    <button
+                      className={compared.has(key) ? 'mini-action selected' : 'mini-action'}
+                      title={t.addCompare}
+                      onClick={() => onCompare(key, item)}
+                    >
+                      <GitCompare size={15}/>
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
-.sidebar-brand {
-  height: 82px;
-  padding: 0 20px;
+function ComparisonTable({ records, t, onRemove, onClear }) {
+  if (!records.length) {
+    return (
+      <div className="empty-state">
+        <GitCompare size={28}/>
+        <strong>{t.noCompare}</strong>
+        <span>{t.compareHint}</span>
+      </div>
+    );
+  }
+
+  const rows = [
+    ['ASIN', 'asin'],
+    [t.sku, 'sellerSkus'],
+    [t.sales7, 'sales7'],
+    [t.sales30, 'sales30'],
+    [t.sales90, 'sales90'],
+    [t.available, 'availableStock'],
+    [t.reserved, 'reservedStock'],
+    [t.daysCover, 'daysOfCover']
+  ];
+
+  return (
+    <section className="section-card">
+      <div className="section-heading">
+        <div>
+          <h2>{t.selected} · {records.length}/5</h2>
+          <p>{t.compareHint}</p>
+        </div>
+        <button className="secondary-button" onClick={onClear}>{t.clear}</button>
+      </div>
+      <div className="table-wrap">
+        <table className="data-table comparison-table">
+          <thead>
+            <tr>
+              <th>{t.product}</th>
+              {records.map(record => (
+                <th key={record.key}>
+                  <strong>{record.item.title || record.item.asin}</strong>
+                  <button className="secondary-button" onClick={() => onRemove(record.key)}>
+                    {t.remove}
+                  </button>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(([label, field]) => (
+              <tr key={field}>
+                <td><strong>{label}</strong></td>
+                {records.map(record => {
+                  const value = record.item[field];
+                  return (
+                    <td key={record.key}>
+                      {field === 'sellerSkus'
+                        ? safeArray(value).join(', ') || record.item.sku || '—'
+                        : field === 'daysOfCover'
+                          ? value == null ? '—' : `${fmt(value)}d`
+                          : fmt(value)}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function App() {
+  const [lang, setLang] = useState(
+    () => localStorage.getItem(LANG_KEY) || 'en'
+  );
+  const t = TEXT[lang] || TEXT.en;
+
+  const [authed, setAuthed] = useState(false);
+  const [activePage, setActivePage] = useState('global');
+  const [market, setMarket] = useState('GLOBAL');
+  const [marketData, setMarketData] = useState({ US: null, AU: null });
+  const [overview, setOverview] = useState(null);
+  const [statuses, setStatuses] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [mobileNav, setMobileNav] = useState(false);
+
+  const [query, setQuery] = useState('');
+  const [category, setCategory] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [period, setPeriod] = useState(30);
+
+  const [sectionOpen, setSectionOpen] = useState({
+    productList: true,
+    salesGrowth: true,
+    inventoryHealth: true
+  });
+
+  function toggleSection(section) {
+    setSectionOpen(old => ({
+      ...old,
+      [section]: !old[section]
+    }));
+  }
+
+  const [watchRecords, setWatchRecords] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem(WATCH_KEY) || '[]');
+    } catch {
+      return [];
+    }
+  });
+
+  const [compareRecords, setCompareRecords] = useState([]);
+
+  const watched = useMemo(
+    () => new Set(watchRecords.map(x => x.key)),
+    [watchRecords]
+  );
+
+  const compared = useMemo(
+    () => new Set(compareRecords.map(x => x.key)),
+    [compareRecords]
+  );
+
+  useEffect(() => {
+    localStorage.setItem(LANG_KEY, lang);
+  }, [lang]);
+
+  useEffect(() => {
+    localStorage.setItem(WATCH_KEY, JSON.stringify(watchRecords));
+  }, [watchRecords]);
+
+  async function requestJson(url) {
+    const response = await fetch(url, {
+      credentials: 'same-origin',
+      cache: 'no-store'
+    });
+
+    if (response.status === 401) {
+      setAuthed(false);
+      throw new Error('Authentication required');
+    }
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || `HTTP ${response.status}`);
+    }
+
+    return data;
+  }
+
+  async function loadCurrent() {
+    if (!authed) return;
+
+    setBusy(true);
+    setError('');
+
+    try {
+      if (market === 'GLOBAL') {
+        const [data, usStatus, auStatus] = await Promise.all([
+          requestJson('/api/partner/global-overview'),
+          requestJson('/api/partner/status?market=US'),
+          requestJson('/api/partner/status?market=AU')
+        ]);
+
+        setOverview(data);
+        setStatuses({ US: usStatus, AU: auStatus });
+      } else {
+        const [dashboard, status] = await Promise.all([
+          requestJson(`/api/partner/dashboard?market=${market}`),
+          requestJson(`/api/partner/status?market=${market}`)
+        ]);
+
+        setMarketData(old => ({ ...old, [market]: dashboard }));
+        setStatuses(old => ({ ...old, [market]: status }));
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    fetch('/api/auth/me', { credentials: 'same-origin' })
+      .then(response => {
+        if (response.ok) setAuthed(true);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (authed) loadCurrent();
+  }, [authed, market]);
+
+  const currentDashboard = market === 'GLOBAL' ? null : marketData[market];
+  const currentMeta = currentDashboard?.meta || {};
+  const marketItems = currentDashboard?.items || [];
+
+  const filteredItems = useMemo(() => {
+    const q = query.trim().toLowerCase();
+
+    return marketItems.filter(item => {
+      const cat = String(item.category || '').toLowerCase();
+
+      const categoryOk =
+        category === 'all' ||
+        (category === 'keyboard' && (cat.includes('keyboard') || cat.includes('键盘'))) ||
+        (category === 'mouse' && (cat.includes('mouse') || cat.includes('鼠标'))) ||
+        (category === 'accessory' && !cat.includes('keyboard') && !cat.includes('mouse') && !cat.includes('键盘') && !cat.includes('鼠标'));
+
+      const statusOk =
+        statusFilter === 'all' ||
+        (statusFilter === 'active' && !item.isInactive) ||
+        (statusFilter === 'inactive' && item.isInactive) ||
+        (statusFilter === 'low' && item.status === 'low') ||
+        (statusFilter === 'stockout' && item.status === 'stockout') ||
+        (statusFilter === 'zero' && item.sales30 === 0);
+
+      const searchOk =
+        !q ||
+        [
+          item.title,
+          item.asin,
+          item.sku,
+          ...safeArray(item.sellerSkus),
+          ...safeArray(item.localSkus)
+        ].some(value => String(value || '').toLowerCase().includes(q));
+
+      return categoryOk && statusOk && searchOk;
+    });
+  }, [marketItems, query, category, statusFilter]);
+
+  const watchedItems = watchRecords
+    .filter(record => market === 'GLOBAL' || record.market === market)
+    .map(record => record.item);
+
+  function selectMarket(code) {
+    setMarket(code);
+    setActivePage(code === 'US' ? 'us' : code === 'AU' ? 'au' : 'global');
+    setQuery('');
+    setCategory('all');
+    setStatusFilter('all');
+    setMobileNav(false);
+  }
+
+  function selectPage(page) {
+    setActivePage(page);
+    setMobileNav(false);
+
+    if (page === 'global') {
+      setMarket('GLOBAL');
+    }
+
+    if (page === 'catalog' || page === 'watchlist' || page === 'compare') {
+      if (market === 'GLOBAL') setMarket('US');
+    }
+  }
+
+  function toggleWatch(key, item) {
+    const marketCode = item.marketCode || market;
+    const storageKey = `${marketCode}|${item.asin || item.id}`;
+
+    setWatchRecords(old =>
+      old.some(record => record.key === storageKey)
+        ? old.filter(record => record.key !== storageKey)
+        : [...old, {
+            key: storageKey,
+            market: marketCode,
+            item,
+            savedAt: new Date().toISOString()
+          }]
+    );
+  }
+
+  function toggleCompare(key, item) {
+    setCompareRecords(old => {
+      if (old.some(record => record.key === key)) {
+        return old.filter(record => record.key !== key);
+      }
+
+      if (old.length >= 5) {
+        setError(t.compareLimit);
+        return old;
+      }
+
+      return [...old, { key, item }];
+    });
+  }
+
+  async function logout() {
+    await fetch('/api/auth/logout', {
+      method: 'POST',
+      credentials: 'same-origin'
+    });
+
+    setAuthed(false);
+    setOverview(null);
+    setMarketData({ US: null, AU: null });
+  }
+
+  const navGroups = [
+    {
+      title: t.overviewGroup,
+      items: [
+        { id: 'global', label: t.global, icon: LayoutDashboard }
+      ]
+    },
+    {
+      title: t.markets,
+      items: [
+        { id: 'us', label: t.us, icon: Flag },
+        { id: 'au', label: t.au, icon: Flag }
+      ]
+    },
+    {
+      title: t.productsGroup,
+      items: [
+        { id: 'catalog', label: t.catalog, icon: Package },
+        { id: 'watchlist', label: t.watchlist, icon: Star },
+        { id: 'compare', label: t.compare, icon: GitCompare }
+      ]
+    },
+    {
+      title: t.systemGroup,
+      items: [
+        { id: 'sync', label: t.sync, icon: RefreshCw },
+        { id: 'logs', label: t.logs, icon: FileText },
+        { id: 'settings', label: t.settings, icon: Settings }
+      ]
+    }
+  ];
+
+  const pageTitle =
+    navGroups.flatMap(group => group.items)
+      .find(item => item.id === activePage)?.label ||
+    (market === 'US' ? t.us : market === 'AU' ? t.au : t.global);
+
+  const marketCurrency = market === 'AU' ? 'AUD' : 'USD';
+
+  const productRows = useMemo(() => {
+    if (activePage === 'watchlist') return watchedItems;
+
+    if (activePage === 'catalog') return filteredItems;
+
+    if (activePage === 'zero') {
+      return filteredItems.filter(
+        item => item.sales7 === 0 && item.sales30 === 0
+      );
+    }
+
+    if (activePage === 'alerts') {
+      return filteredItems.filter(
+        item => ['low', 'stockout'].includes(item.status)
+      );
+    }
+
+    return filteredItems;
+  }, [activePage, watchedItems, filteredItems]);
+
+  const salesField = period === 7
+    ? 'sales7'
+    : period === 90
+      ? 'sales90'
+      : 'sales30';
+
+  const topProducts = [...marketItems]
+    .sort((a, b) => Number(b[salesField] || 0) - Number(a[salesField] || 0))
+    .slice(0, 10)
+    .map(item => ({
+      name: item.sku || item.asin,
+      units: Number(item[salesField] || 0)
+    }));
+
+  if (!authed) {
+    return (
+      <Login
+        lang={lang}
+        setLang={setLang}
+        onLogin={() => setAuthed(true)}
+      />
+    );
+  }
+
+  const summaryData = overview?.markets || {};
+  const usData = summaryData.US?.data || {};
+  const auData = summaryData.AU?.data || {};
+
+  return (
+    <div className="app-shell">
+      <aside className={`sidebar ${mobileNav ? 'open' : ''}`}>
+        <div className="sidebar-brand">
+          <div className="brandmark">K</div>
+          <div>
+            <strong>KEYCHRON</strong>
+            <span>{t.brand}</span>
+          </div>
+          <button className="mobile-close" onClick={() => setMobileNav(false)}>
+            <X size={18}/>
+          </button>
+        </div>
+
+        <div className="sidebar-scroll">
+          {navGroups.map(group => (
+            <div className="nav-group" key={group.title}>
+              <div className="nav-caption">{group.title}</div>
+              {group.items.map(item => (
+                <button
+                  key={item.id}
+                  className={`nav-item ${activePage === item.id ? 'active' : ''}`}
+                  onClick={() => item.id === 'us' || item.id === 'au'
+                    ? selectMarket(item.id.toUpperCase())
+                    : selectPage(item.id)}
+                >
+                  <item.icon size={17}/>
+                  <span>{item.label}</span>
+                  {activePage === item.id && <ChevronRight size={14}/>}
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+
+        <div className="sidebar-bottom">
+          <div className="user-avatar">K</div>
+          <div className="user-meta">
+            <strong>Keychron Partner</strong>
+            <span>Operations Workspace</span>
+          </div>
+          <button className="sidebar-logout" onClick={logout} title={t.signOut}>
+            <LogOut size={17}/>
+          </button>
+        </div>
+      </aside>
+
+      {mobileNav && (
+        <button
+          className="nav-scrim"
+          onClick={() => setMobileNav(false)}
+          aria-label="Close navigation"
+        />
+      )}
+
+      <div className="workspace">
+        <header className="topbar">
+          <div className="topbar-left">
+            <button className="mobile-menu" onClick={() => setMobileNav(true)}>
+              <Menu size={20}/>
+            </button>
+            <div className="breadcrumb">
+              Workspace <span>/</span> <strong>{pageTitle}</strong>
+            </div>
+          </div>
+
+          <div className="topbar-actions">
+            <span className="market-indicator">
+              <i/>
+              {market === 'GLOBAL' ? 'GLOBAL' : `${market} · ${marketCurrency}`}
+            </span>
+            <button
+              className="topbar-button"
+              onClick={() => setLang(lang === 'en' ? 'zh' : 'en')}
+            >
+              <Languages size={17}/>
+              <span>{lang.toUpperCase()}</span>
+            </button>
+            <button
+              className="topbar-button"
+              onClick={loadCurrent}
+              disabled={busy}
+            >
+              <RefreshCw size={17} className={busy ? 'spin' : ''}/>
+              <span>{t.refresh}</span>
+            </button>
+          </div>
+        </header>
+
+        <main className="page-content">
+          <div className="page-heading">
+            <div>
+              <div className="eyebrow">
+                KEYCHRON · {market === 'GLOBAL' ? 'GLOBAL OPERATIONS' : market}
+              </div>
+              <h1>{pageTitle}</h1>
+              <p>
+                {market === 'GLOBAL'
+                  ? t.globalNote
+                  : `${market} · ${marketCurrency} · ${t.overview}`}
+              </p>
+            </div>
+            <div className="heading-meta">
+              <span>{t.updated}</span>
+              <strong>
+                {market === 'GLOBAL'
+                  ? overview?.generatedAt
+                    ? new Date(overview.generatedAt).toLocaleString()
+                    : '—'
+                  : currentMeta.generatedAt
+                    ? new Date(currentMeta.generatedAt).toLocaleString()
+                    : '—'}
+              </strong>
+            </div>
+          </div>
+
+          {error && (
+            <div className="error banner">
+              <CircleAlert size={17}/>
+              {error}
+              <button onClick={() => setError('')}><X size={15}/></button>
+            </div>
+          )}
+
+          {activePage === 'global' && (
+            <>
+              <section className="market-summary-grid">
+                {[
+                  { code: 'US', data: usData, label: t.us, currency: 'USD' },
+                  { code: 'AU', data: auData, label: t.au, currency: 'AUD' }
+                ].map(m => (
+                  <article className="market-summary-card" key={m.code}>
+                    <div className="summary-top">
+                      <span className="market-flag"><Flag size={19}/></span>
+                      <span className="market-code">{m.code} · {m.currency}</span>
+                    </div>
+                    <h2>{m.label}</h2>
+                    <div className="summary-metrics">
+                      <div><span>{t.products}</span><strong>{fmt(m.data.catalogCount)}</strong></div>
+                      <div><span>{t.sales7}</span><strong>{fmt(m.data.sales7)}</strong></div>
+                      <div><span>{t.sales30}</span><strong>{fmt(m.data.sales30)}</strong></div>
+                      <div><span>{t.sales90}</span><strong>{fmt(m.data.sales90)}</strong></div>
+                      <div><span>{t.available}</span><strong>{fmt(m.data.availableStock)}</strong></div>
+                      <div><span>{t.reserved}</span><strong>{fmt(m.data.reservedStock)}</strong></div>
+                    </div>
+                    <div className="summary-footer">
+                      <span className={summaryData[m.code]?.available ? 'live-label' : 'offline-label'}>
+                        {summaryData[m.code]?.available ? t.success : t.notSynced}
+                      </span>
+                      <button onClick={() => selectMarket(m.code)}>
+                        {t.open || 'Open'} <ArrowUpRight size={15}/>
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </section>
+              <section className="section-card">
+                <div className="section-heading">
+                  <div>
+                    <h2>{t.overview}</h2>
+                    <p>{t.globalNote}</p>
+                  </div>
+                </div>
+                <div className="notice-banner">{t.units}</div>
+              </section>
+            </>
+          )}
+
+          {(market === 'US' || market === 'AU') &&
+            ['us', 'au'].includes(activePage) && (
+              <>
+                <section className="metric-grid">
+                  <Metric label={t.products} value={currentMeta.catalogCount} icon={Package}/>
+                  <Metric label={t.sales7} value={currentMeta.sales7} icon={TrendingUp} growth={currentMeta.salesGrowth7}/>
+                  <Metric label={t.sales30} value={currentMeta.sales30} icon={Activity} growth={currentMeta.salesGrowth30}/>
+                  <Metric label={t.sales90} value={currentMeta.sales90} icon={BarChart3} growth={currentMeta.salesGrowth90}/>
+                  <Metric label={t.average} value={currentMeta.dailyAverage30} icon={Activity}/>
+                  <Metric label={t.available} value={currentMeta.availableStock} icon={Boxes}/>
+                  <Metric label={t.reserved} value={currentMeta.reservedStock} icon={Warehouse}/>
+                  <Metric label={t.alerts} value={currentMeta.inventoryAlertCount} icon={AlertTriangle} tone="orange"/>
+                </section>
+
+                {/* PRODUCT LIST */}
+                <section className="section-card">
+                  <div className="section-heading">
+                    <div>
+                      <h2>{t.catalog}</h2>
+                      <p>{fmt(currentMeta.catalogCount)} {t.products} · {market} · ASIN Consolidated</p>
+                    </div>
+                    <button
+                      type="button"
+                      className="section-toggle"
+                      aria-label={sectionOpen.productList ? 'Hide product list' : 'Show product list'}
+                      aria-expanded={sectionOpen.productList}
+                      onClick={() => toggleSection('productList')}
+                    >
+                      <ChevronRight size={20} style={{
+                        transform: sectionOpen.productList ? 'rotate(90deg)' : 'rotate(0deg)',
+                        transition: 'transform 0.2s'
+                      }}/>
+                    </button>
+                  </div>
+                  {sectionOpen.productList && (
+                    <>
+                      <div className="table-filters">
+                        <label className="search-box">
+                          <Search size={16}/>
+                          <input
+                            value={query}
+                            onChange={e => setQuery(e.target.value)}
+                            placeholder={t.search}
+                          />
+                        </label>
+                        <select value={category} onChange={e => setCategory(e.target.value)}>
+                          <option value="all">{t.allCategories}</option>
+                          <option value="keyboard">{t.keyboard}</option>
+                          <option value="mouse">{t.mouse}</option>
+                          <option value="accessory">{t.accessories}</option>
+                        </select>
+                        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+                          <option value="all">{t.allStatuses}</option>
+                          <option value="active">{t.active}</option>
+                          <option value="inactive">{t.inactive}</option>
+                          <option value="low">{t.lowStock}</option>
+                          <option value="stockout">{t.stockout}</option>
+                          <option value="zero">{t.zeroSales}</option>
+                        </select>
+                      </div>
+                      <ProductTable
+                        items={filteredItems}
+                        t={t}
+                        watched={watched}
+                        compared={compared}
+                        onWatch={toggleWatch}
+                        onCompare={toggleCompare}
+                      />
+                    </>
+                  )}
+                </section>
+
+                {/* SALES & GROWTH ANALYSIS */}
+                <section className="section-card">
+                  <div className="section-heading">
+                    <div>
+                      <h2>{t.salesTrend}</h2>
+                      <p>{t.units}</p>
+                    </div>
+                    <div className="section-heading-actions">
+                      <div className="period-toolbar">
+                        {[7, 30, 90].map(p => (
+                          <button
+                            key={p}
+                            className={period === p ? 'active' : ''}
+                            onClick={() => setPeriod(p)}
+                          >
+                            {p}D
+                          </button>
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        className="section-toggle"
+                        aria-label={sectionOpen.salesGrowth ? 'Hide sales analysis' : 'Show sales analysis'}
+                        aria-expanded={sectionOpen.salesGrowth}
+                        onClick={() => toggleSection('salesGrowth')}
+                      >
+                        <ChevronRight size={20} style={{
+                          transform: sectionOpen.salesGrowth ? 'rotate(90deg)' : 'rotate(0deg)',
+                          transition: 'transform 0.2s'
+                        }}/>
+                      </button>
+                    </div>
+                  </div>
+                  {sectionOpen.salesGrowth && (
+                    <>
+                      <div className="chart-area">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={topProducts}>
+                            <CartesianGrid strokeDasharray="3 3"/>
+                            <XAxis dataKey="name" hide/>
+                            <YAxis/>
+                            <Tooltip/>
+                            <Bar dataKey="units" fill="#2775c7" radius={[5, 5, 0, 0]}/>
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <p className="market-disclaimer">
+                        Product ranking by selected period. Daily historical sales series are not available in the current API response.
+                      </p>
+                    </>
+                  )}
+                </section>
+
+                {/* INVENTORY HEALTH */}
+                <section className="section-card">
+                  <div className="section-heading">
+                    <div>
+                      <h2>{t.inventoryHealth}</h2>
+                      <p>{t.inventoryCoverage}</p>
+                    </div>
+                    <button
+                      type="button"
+                      className="section-toggle"
+                      aria-label={sectionOpen.inventoryHealth ? 'Hide inventory health' : 'Show inventory health'}
+                      aria-expanded={sectionOpen.inventoryHealth}
+                      onClick={() => toggleSection('inventoryHealth')}
+                    >
+                      <ChevronRight size={20} style={{
+                        transform: sectionOpen.inventoryHealth ? 'rotate(90deg)' : 'rotate(0deg)',
+                        transition: 'transform 0.2s'
+                      }}/>
+                    </button>
+                  </div>
+                  {sectionOpen.inventoryHealth && (
+                    <div className="attention-grid">
+                      <div><Warehouse/><span>{t.available}</span><strong>{fmt(currentMeta.availableStock)}</strong></div>
+                      <div><Boxes/><span>{t.reserved}</span><strong>{fmt(currentMeta.reservedStock)}</strong></div>
+                      <div><AlertTriangle/><span>{t.alerts}</span><strong>{fmt(currentMeta.inventoryAlertCount)}</strong></div>
+                    </div>
+                  )}
+                </section>
+              </>
+            )}
+
+          {activePage === 'catalog' && (
+            <section className="section-card">
+              <div className="section-heading">
+                <div>
+                  <h2>{t.catalog}</h2>
+                  <p>{fmt(currentMeta.catalogCount)} {t.products} · {market}</p>
+                </div>
+                <div className="table-filters">
+                  <label className="search-box">
+                    <Search size={16}/>
+                    <input
+                      value={query}
+                      onChange={e => setQuery(e.target.value)}
+                      placeholder={t.search}
+                    />
+                  </label>
+                  <select value={category} onChange={e => setCategory(e.target.value)}>
+                    <option value="all">{t.allCategories}</option>
+                    <option value="keyboard">{t.keyboard}</option>
+                    <option value="mouse">{t.mouse}</option>
+                    <option value="accessory">{t.accessories}</option>
+                  </select>
+                  <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+                    <option value="all">{t.allStatuses}</option>
+                    <option value="active">{t.active}</option>
+                    <option value="inactive">{t.inactive}</option>
+                    <option value="low">{t.lowStock}</option>
+                    <option value="stockout">{t.stockout}</option>
+                    <option value="zero">{t.zeroSales}</option>
+                  </select>
+                </div>
+              </div>
+              <ProductTable
+                items={filteredItems}
+                t={t}
+                watched={watched}
+                compared={compared}
+                onWatch={toggleWatch}
+                onCompare={toggleCompare}
+              />
+            </section>
+          )}
+
+          {activePage === 'watchlist' && (
+            <section className="section-card">
+              <div className="section-heading">
+                <div>
+                  <h2>{t.watchlist}</h2>
+                  <p>{t.watchSaved} · {watchedItems.length}</p>
+                </div>
+              </div>
+              <ProductTable
+                items={watchedItems}
+                t={t}
+                watched={watched}
+                compared={compared}
+                onWatch={toggleWatch}
+                onCompare={toggleCompare}
+              />
+            </section>
+          )}
+
+          {activePage === 'compare' && (
+            <ComparisonTable
+              records={compareRecords}
+              t={t}
+              onRemove={key => setCompareRecords(old => old.filter(x => x.key !== key))}
+              onClear={() => setCompareRecords([])}
+            />
+          )}
+
+          {(activePage === 'sync' || activePage === 'logs') && (
+            <section className="section-card">
+              <div className="section-heading">
+                <div>
+                  <h2>{t.syncStatus}</h2>
+                  <p>{t.syncNote}</p>
+                </div>
+                <Activity size={20}/>
+              </div>
+              <div className="sync-grid">
+                {['US', 'AU'].map(code => {
+                  const s = statuses[code];
+                  return (
+                    <div className="sync-card" key={code}>
+                      <strong>{code} · {code === 'US' ? 'USD' : 'AUD'}</strong>
+                      <span className={`status-pill ${s?.status === 'success' ? 'healthy' : 'unknown'}`}>
+                        {s?.status || t.notSynced}
+                      </span>
+                      <small>
+                        {t.updated}: {s?.lastSuccessfulSync
+                          ? new Date(s.lastSuccessfulSync).toLocaleString()
+                          : '—'}
+                      </small>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
+          {activePage === 'settings' && (
+            <section className="section-card">
+              <div className="section-heading">
+                <div>
+                  <h2>{t.settings}</h2>
+                  <p>{t.language}: {lang.toUpperCase()}</p>
+                </div>
+                <Settings size={20}/>
+              </div>
+              <p className="market-disclaimer">{t.footer}</p>
+            </section>
+          )}
+
+          {busy && (
+            <div className="loading-line">
+              <RefreshCw size={15} className="spin"/>
+              {t.loading}
+            </div>
+          )}
+
+          <footer className="app-footer">{t.footer}</footer>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+createRoot(document.getElementById('root')).render(<App />);
+
+/* V4.2 collapsible dashboard sections */
+
+.section-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border: 1px solid #dce3ec;
+  border-radius: 9px;
+  background: transparent;
+  color: #334155;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.section-toggle:hover {
+  background: #eef4fb;
+  border-color: #8bb7e8;
+}
+
+.section-heading-actions {
   display: flex;
   align-items: center;
   gap: 12px;
-  border-bottom: 1px solid #ffffff16;
-  flex-shrink: 0;
-}
-
-.brandmark {
-  width: 40px;
-  height: 40px;
-  border-radius: 11px;
-  background: #fff;
-  color: #216eb8;
-  display: grid;
-  place-items: center;
-  font-size: 23px;
-  font-weight: 800;
-  flex-shrink: 0;
-}
-
-.sidebar-brand > div:nth-child(2) {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-.sidebar-brand strong {
-  font-size: 14px;
-  letter-spacing: 2px;
-}
-
-.sidebar-brand span {
-  font-size: 9px;
-  letter-spacing: .8px;
-  color: #9eb1c7;
-  white-space: nowrap;
-}
-
-.sidebar-scroll {
-  padding: 19px 12px;
-  overflow-y: auto;
-  flex: 1;
-}
-
-.nav-group { margin-bottom: 23px; }
-
-.nav-caption {
-  font-size: 9px;
-  letter-spacing: 1.5px;
-  color: #8297af;
-  font-weight: 700;
-  padding: 0 11px 9px;
-}
-
-.nav-item {
-  width: 100%;
-  min-height: 41px;
-  border: 0;
-  background: transparent;
-  color: #bdcada;
-  border-radius: 7px;
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  padding: 0 11px;
-  margin: 3px 0;
-  text-align: left;
-  font-size: 12px;
-  transition: background .15s, color .15s;
-}
-
-.nav-item:hover {
-  background: #ffffff0c;
-  color: #fff;
-}
-
-.nav-item.active {
-  background: #244766;
-  color: #fff;
-  box-shadow: inset 3px 0 #64a9ed;
-}
-
-.nav-item span { flex: 1; }
-
-.sidebar-bottom {
-  border-top: 1px solid #ffffff16;
-  padding: 14px;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-}
-
-.user-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: #315678;
-  display: grid;
-  place-items: center;
-  font-weight: 700;
-}
-
-.user-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-  flex: 1;
-}
-
-.user-meta strong { font-size: 11px; }
-.user-meta span { font-size: 9px; color: #91a5bb; }
-
-.sidebar-logout,
-.mobile-close {
-  border: 0;
-  background: transparent;
-  color: #b7c6d7;
-  padding: 7px;
-}
-
-/* WORKSPACE */
-
-.workspace {
-  margin-left: 258px;
-  min-height: 100vh;
-}
-
-.topbar {
-  height: 68px;
-  background: #fff;
-  border-bottom: 1px solid #e4eaf1;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 30px;
-  position: sticky;
-  top: 0;
-  z-index: 10;
-}
-
-.topbar-left,
-.topbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.breadcrumb {
-  font-size: 12px;
-  color: #8a96a7;
-}
-
-.breadcrumb span {
-  margin: 0 8px;
-  color: #c0c8d2;
-}
-
-.breadcrumb strong {
-  color: #26374c;
-  font-weight: 600;
-}
-
-.market-indicator {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: #2d875b;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 1px;
-}
-
-.market-indicator i {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #35a66b;
-}
-
-.topbar-button {
-  border: 1px solid #e1e8f0;
-  background: #fff;
-  border-radius: 8px;
-  padding: 8px 11px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: #526176;
-  font-size: 11px;
-}
-
-.topbar-button:hover { background: #f7f9fc; }
-
-.page-content {
-  max-width: 1600px;
-  margin: 0 auto;
-  padding: 30px 32px 55px;
-}
-
-.page-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  gap: 20px;
-  margin-bottom: 24px;
-}
-
-.eyebrow {
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 1.8px;
-  color: #347fc0;
-}
-
-.page-heading h1 {
-  font-size: 29px;
-  letter-spacing: -.7px;
-  margin: 7px 0 5px;
-  color: #172536;
-}
-
-.page-heading p {
-  font-size: 12px;
-  color: #8290a2;
-  margin: 0;
-}
-
-.heading-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  text-align: right;
-  font-size: 10px;
-  color: #8a97a8;
-}
-
-.heading-meta strong {
-  font-size: 11px;
-  color: #44546a;
-}
-
-/* MARKET SUMMARY */
-
-.market-summary-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 17px;
-  margin-bottom: 19px;
-}
-
-.market-summary-card,
-.section-card,
-.metric-card {
-  background: #fff;
-  border: 1px solid #e4eaf1;
-  border-radius: 12px;
-}
-
-.market-summary-card {
-  padding: 22px;
-  transition: box-shadow .15s, transform .15s;
-}
-
-.market-summary-card:hover {
-  box-shadow: 0 8px 25px #20344f0b;
-  transform: translateY(-1px);
-}
-
-.summary-top {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.market-flag {
-  width: 37px;
-  height: 37px;
-  border-radius: 9px;
-  background: #edf5fd;
-  color: #2878c8;
-  display: grid;
-  place-items: center;
-}
-
-.market-code {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 1.3px;
-  color: #8290a2;
-}
-
-.market-summary-card h2 {
-  font-size: 18px;
-  margin: 15px 0 3px;
-  color: #23354a;
-}
-
-.summary-metrics {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px 20px;
-  padding: 19px 0;
-  margin-top: 17px;
-  border-top: 1px solid #edf0f4;
-  border-bottom: 1px solid #edf0f4;
-}
-
-.summary-metrics div {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.summary-metrics span {
-  font-size: 10px;
-  color: #8491a2;
-}
-
-.summary-metrics strong {
-  font-size: 20px;
-  color: #26374c;
-  font-variant-numeric: tabular-nums;
-}
-
-.summary-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 16px;
-}
-
-.summary-footer button {
-  border: 0;
-  border-radius: 7px;
-  background: #216eb8;
-  color: #fff;
-  padding: 9px 12px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 11px;
-}
-
-.summary-footer button:hover { background: #185c9d; }
-
-.live-label,
-.offline-label {
-  font-size: 10px;
-  font-weight: 600;
-}
-
-.live-label { color: #2d875b; }
-.offline-label { color: #a0a9b5; }
-
-/* SECTION CARDS */
-
-.section-card {
-  padding: 21px;
-  margin: 16px 0;
-  min-width: 0;
 }
 
 .section-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 15px;
-  margin-bottom: 18px;
-}
-
-.section-heading h2 {
-  font-size: 16px;
-  margin: 0 0 5px;
-  color: #26374c;
-}
-
-.section-heading p {
-  font-size: 11px;
-  color: #8491a2;
-  margin: 0;
-}
-
-.section-tag {
-  font-size: 9px;
-  letter-spacing: 1px;
-  color: #6e8095;
-  background: #f1f5f9;
-  border-radius: 5px;
-  padding: 6px 8px;
-}
-
-/* METRICS */
-
-.metric-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-  margin-bottom: 18px;
-}
-
-.metric-card {
-  padding: 17px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-  transition: box-shadow .15s;
-}
-
-.metric-card:hover {
-  box-shadow: 0 5px 18px #20344f0b;
-}
-
-.metric-icon {
-  width: 38px;
-  height: 38px;
-  border-radius: 9px;
-  background: #edf5fd;
-  color: #2878c8;
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-}
-
-.metric-icon.orange {
-  background: #fff1e8;
-  color: #c96c2d;
-}
-
-.metric-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-.metric-copy span {
-  font-size: 10px;
-  color: #7f8da0;
-}
-
-.metric-copy strong {
-  font-size: 20px;
-  color: #1e2c3d;
-  overflow-wrap: anywhere;
-  font-variant-numeric: tabular-nums;
-}
-
-.metric-copy small {
-  font-size: 10px;
-  font-weight: 700;
-}
-
-.growth-positive { color: #27885b; }
-.growth-negative { color: #c34f37; }
-
-/* INVENTORY HEALTH */
-
-.attention-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 11px;
-}
-
-.attention-grid > div {
-  border: 1px solid #edf0f4;
-  border-radius: 8px;
-  padding: 15px;
-  display: grid;
-  grid-template-columns: 25px 1fr;
-  gap: 5px 9px;
-  align-items: center;
-}
-
-.attention-grid svg {
-  grid-row: span 2;
-  color: #d17b36;
-  width: 19px;
-}
-
-.attention-grid span {
-  font-size: 10px;
-  color: #7e8da0;
-}
-
-.attention-grid strong {
-  font-size: 17px;
-  color: #26374c;
-  font-variant-numeric: tabular-nums;
-}
-
-/* CHART */
-
-.chart-area {
-  height: 330px;
-  width: 100%;
-  min-width: 0;
-  margin-top: 12px;
-}
-
-.recharts-cartesian-grid-horizontal line {
-  stroke: #edf0f4;
-}
-
-.recharts-text {
-  fill: #8491a2;
-  font-size: 10px;
-}
-
-.recharts-tooltip-wrapper {
-  outline: none;
-}
-
-.market-disclaimer {
-  font-size: 10px;
-  color: #8a97a8;
-  margin: 13px 0 0;
-  line-height: 1.6;
-}
-
-/* FILTERS */
-
-.table-filters {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.search-box {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  border: 1px solid #e1e8f0;
-  border-radius: 7px;
-  padding: 0 9px;
-  color: #8391a2;
-  background: #fff;
-}
-
-.search-box input {
-  width: 200px;
-  max-width: 100%;
-  border: 0;
-  outline: 0;
-  padding: 9px 0;
-  font-size: 10px;
-  color: #34465e;
-}
-
-.table-filters select {
-  border: 1px solid #e1e8f0;
-  border-radius: 7px;
-  padding: 9px;
-  background: #fff;
-  color: #53647a;
-  font-size: 10px;
-  outline-color: #8ab7e2;
-}
-
-.period-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: #8592a3;
-  font-size: 10px;
-}
-
-.period-toolbar span { margin-right: 5px; }
-
-.period-toolbar button {
-  border: 0;
-  background: #f1f4f8;
-  border-radius: 6px;
-  padding: 7px 11px;
-  color: #66778d;
-  font-size: 10px;
-}
-
-.period-toolbar button:hover { background: #e8eff7; }
-
-.period-toolbar button.active {
-  background: #e7f1fc;
-  color: #216eb8;
-  font-weight: 700;
-}
-
-/* TABLE */
-
-.table-wrap {
-  width: 100%;
-  overflow: auto;
-  border: 1px solid #edf0f4;
-  border-radius: 8px;
-}
-
-.data-table {
-  width: 100%;
-  border-collapse: collapse;
-  min-width: 1050px;
-}
-
-.data-table th {
-  background: #f7f9fc;
-  color: #8592a3;
-  font-size: 9px;
-  letter-spacing: .6px;
-  text-transform: uppercase;
-  text-align: left;
-  padding: 13px 12px;
-  border-bottom: 1px solid #e8edf2;
-  white-space: nowrap;
-}
-
-.data-table td {
-  font-size: 10px;
-  color: #536176;
-  padding: 12px;
-  border-bottom: 1px solid #edf0f4;
-  white-space: nowrap;
-}
-
-.data-table tbody tr:hover { background: #fbfdff; }
-.data-table tbody tr:last-child td { border-bottom: 0; }
-
-.product-cell {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 220px;
-  max-width: 340px;
-}
-
-.product-thumb {
-  width: 40px;
-  height: 40px;
-  border: 1px solid #edf0f4;
-  border-radius: 7px;
-  display: grid;
-  place-items: center;
-  overflow: hidden;
-  color: #91a0b1;
-  background: #fff;
-  flex-shrink: 0;
-}
-
-.product-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-.product-name {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-.product-name strong {
-  font-size: 10px;
-  color: #26384e;
-  white-space: normal;
-  max-width: 250px;
-}
-
-.product-name span {
-  font-size: 9px;
-  color: #8996a7;
-  white-space: normal;
-  max-width: 250px;
-  line-height: 1.5;
-}
-
-.numeric {
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-}
-
-.status-pill {
-  display: inline-flex;
-  align-items: center;
-  border-radius: 5px;
-  padding: 5px 8px;
-  font-size: 9px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.status-pill.healthy {
-  background: #edf7f1;
-  color: #288456;
-}
-
-.status-pill.low {
-  background: #fff2e8;
-  color: #c36b2d;
-}
-
-.status-pill.stockout {
-  background: #fff0ed;
-  color: #c34f37;
-}
-
-.status-pill.no_sales {
-  background: #fff7e8;
-  color: #a87624;
-}
-
-.status-pill.unknown {
-  background: #f1f3f6;
-  color: #8591a0;
-}
-
-/* ACTIONS */
-
-.row-actions {
-  display: flex;
-  gap: 5px;
-}
-
-.mini-action {
-  width: 29px;
-  height: 29px;
-  border: 1px solid #e5eaf0;
-  background: #fff;
-  border-radius: 6px;
-  color: #8491a2;
-  display: grid;
-  place-items: center;
-}
-
-.mini-action:hover {
-  border-color: #a6c9e9;
-  color: #216eb8;
-}
-
-.mini-action.selected {
-  color: #216eb8;
-  background: #edf5fd;
-  border-color: #cfe2f5;
-}
-
-.secondary-button {
-  border: 1px solid #e1e8f0;
-  border-radius: 7px;
-  padding: 8px 11px;
-  background: #fff;
-  color: #53647a;
-  font-size: 10px;
-}
-
-.secondary-button:hover { background: #f5f8fc; }
-
-/* EMPTY / NOTICES */
-
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 9px;
-  padding: 45px 15px;
-  color: #8a97a8;
-}
-
-.empty-state strong {
-  font-size: 12px;
-  color: #526176;
-}
-
-.empty-state span { font-size: 10px; }
-
-.notice-banner,
-.error {
-  padding: 12px 14px;
-  border-radius: 8px;
-  font-size: 11px;
-  margin-bottom: 14px;
-}
-
-.notice-banner {
-  background: #eef5fc;
-  color: #47729d;
-}
-
-.error {
-  background: #fff0ed;
-  color: #b94735;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.error button {
-  margin-left: auto;
-  border: 0;
-  background: transparent;
-  color: inherit;
-}
-
-/* SYNC */
-
-.sync-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.sync-card {
-  border: 1px solid #e8edf2;
-  border-radius: 9px;
-  padding: 17px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 11px;
-}
-
-.sync-card > strong {
-  font-size: 13px;
-  color: #293b50;
-}
-
-.sync-card small {
-  font-size: 10px;
-  color: #8391a2;
-}
-
-/* LOADING / FOOTER */
-
-.loading-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: #7d8da1;
-  font-size: 10px;
-  padding: 10px;
-}
-
-.app-footer {
-  text-align: center;
-  color: #9aa5b2;
-  font-size: 9px;
-  padding: 25px 0 5px;
-}
-
-.spin { animation: spin 1s linear infinite; }
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-/* LOGIN */
-
-.login-wrap {
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  padding: 20px;
-  background: linear-gradient(135deg, #f5f8fc, #edf3fa);
-}
-
-.login-card {
-  width: min(100%, 390px);
-  background: #fff;
-  border: 1px solid #e4eaf1;
-  border-radius: 16px;
-  padding: 34px;
-  box-shadow: 0 12px 40px #20344f0d;
-  display: flex;
-  flex-direction: column;
-  gap: 13px;
-}
-
-.login-card .brandmark { margin-bottom: 8px; }
-
-.topline {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 11px;
-  letter-spacing: 2px;
-  font-weight: 700;
-}
-
-.login-card h1 {
-  font-size: 25px;
-  margin: 8px 0 0;
-}
-
-.login-card p {
-  font-size: 12px;
-  color: #8994a3;
-  margin: 0 0 8px;
-}
-
-.login-card label {
-  font-size: 11px;
-  color: #526174;
-}
-
-.login-card input {
-  border: 1px solid #dfe6ee;
-  border-radius: 8px;
-  padding: 12px;
-  font-size: 14px;
-  outline-color: #4a91d2;
-}
-
-.login-card small {
-  color: #9aa4b1;
-  font-size: 10px;
-  text-align: center;
-  margin-top: 6px;
-}
-
-.primary {
-  border: 0;
-  border-radius: 7px;
-  padding: 11px 14px;
-  background: #216eb8;
-  color: #fff;
-  font-weight: 600;
-}
-
-.primary:hover { background: #185c9d; }
-
-.lang {
-  border: 1px solid #e2e8f0;
-  background: #fff;
-  border-radius: 8px;
-  padding: 8px 10px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: #425168;
-  font-size: 11px;
-}
-
-/* MOBILE NAV */
-
-.mobile-menu,
-.mobile-close,
-.nav-scrim {
-  display: none;
-}
-
-/* TABLET */
-
-@media (max-width: 1150px) {
-  .sidebar { width: 230px; }
-  .workspace { margin-left: 230px; }
-  .page-content { padding: 25px 22px 45px; }
-
-  .metric-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .section-heading { align-items: flex-start; }
-}
-
-/* MOBILE */
-
-@media (max-width: 760px) {
-  .sidebar {
-    transform: translateX(-100%);
-    transition: transform .2s ease;
-    width: 270px;
-  }
-
-  .sidebar.open { transform: translateX(0); }
-
-  .mobile-close {
-    display: block;
-    margin-left: auto;
-  }
-
-  .nav-scrim {
-    display: block;
-    position: fixed;
-    inset: 0;
-    background: #0c1726a6;
-    border: 0;
-    z-index: 15;
-  }
-
-  .workspace { margin-left: 0; }
-
-  .topbar {
-    height: 60px;
-    padding: 0 13px;
-  }
-
-  .mobile-menu {
-    display: grid;
-    place-items: center;
-    border: 1px solid #e1e8f0;
-    border-radius: 7px;
-    background: #fff;
-    color: #526176;
-    width: 34px;
-    height: 34px;
-  }
-
-  .breadcrumb { font-size: 10px; }
-  .topbar-left { gap: 8px; }
-  .topbar-actions { gap: 5px; }
-
-  .topbar-button { padding: 8px; }
-  .topbar-button span { display: none; }
-
-  .market-indicator { font-size: 9px; }
-
-  .page-content { padding: 20px 13px 35px; }
-
-  .page-heading {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  .page-heading h1 { font-size: 24px; }
-  .heading-meta { text-align: left; }
-
-  .market-summary-grid { grid-template-columns: 1fr; }
-
-  .market-summary-card { padding: 17px; }
-
-  .metric-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-  }
-
-  .metric-card {
-    padding: 11px;
-    gap: 8px;
-  }
-
-  .metric-icon {
-    width: 31px;
-    height: 31px;
-  }
-
-  .metric-copy strong { font-size: 16px; }
-
-  .section-card { padding: 15px 11px; }
-
-  .section-heading {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 11px;
-  }
-
-  .table-filters {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    width: 100%;
-  }
-
-  .search-box { grid-column: 1 / -1; }
-  .search-box input { width: 100%; }
-
-  .attention-grid { grid-template-columns: 1fr; }
-  .sync-grid { grid-template-columns: 1fr; }
-  .chart-area { height: 280px; }
-
-  .period-toolbar { flex-wrap: wrap; }
-}
-
-/* SMALL MOBILE */
-
-@media (max-width: 390px) {
-  .metric-grid { grid-template-columns: 1fr 1fr; }
-
-  .metric-copy span { font-size: 9px; }
-  .metric-copy strong { font-size: 14px; }
-
-  .summary-metrics { gap: 12px; }
-
-  .topbar-left { gap: 6px; }
-  .breadcrumb { font-size: 9px; }
-
-  .market-summary-card h2 { font-size: 16px; }
+  gap: 16px;
 }
