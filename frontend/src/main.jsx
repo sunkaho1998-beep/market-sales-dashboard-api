@@ -551,7 +551,7 @@ function ComparisonTable({ records, t, onRemove, onClear }) {
       </div>
     </section>
   );
-  
+}  
 function App() {
   const [lang, setLang] = useState(
     () => localStorage.getItem(LANG_KEY) || 'en'
