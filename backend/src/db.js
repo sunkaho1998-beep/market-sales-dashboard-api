@@ -16,6 +16,7 @@ export const pool = new Pool({
 
 // ==========================================
 // DATABASE INITIALIZATION
+// Existing tables and historical data preserved
 // ==========================================
 
 export async function initDb() {
@@ -143,6 +144,34 @@ function validateMarket(marketCode, currencyCode) {
 }
 
 // ==========================================
+// HELPERS
+// ==========================================
+
+const clean = value => String(value ?? '').trim();
+
+const normalizeAsin = value =>
+  clean(value).toUpperCase();
+
+const normalizeSku = value =>
+  clean(value).toUpperCase().replace(/[\s-]+/g, '');
+
+const validTitle = value => {
+  const title = clean(value);
+  if (!title || title === '/' || title === '-') return null;
+  return title;
+};
+
+const numeric = value => {
+  const result = Number(value);
+  return Number.isFinite(result) ? result : 0;
+};
+
+const growthRate = (current, previous) => {
+  if (previous <= 0) return null;
+  return ((current - previous) / previous) * 100;
+};
+
+// ==========================================
 // PARTNER SESSIONS
 // ==========================================
 
@@ -156,13 +185,15 @@ export async function createSession(hash, expires) {
 }
 
 export async function hasSession(hash) {
-  const r = await pool.query(
-    `SELECT 1 FROM partner_sessions
-     WHERE token_hash = $1 AND expires_at > now()`,
+  const result = await pool.query(
+    `SELECT 1
+     FROM partner_sessions
+     WHERE token_hash = $1
+       AND expires_at > now()`,
     [hash]
   );
 
-  return r.rowCount > 0;
+  return result.rowCount > 0;
 }
 
 export async function deleteSession(hash) {
@@ -237,6 +268,8 @@ export async function finishRun(
 
 // ==========================================
 // MARKET DATA PERSISTENCE
+// Keep original shop-level records.
+// No destructive replacement of historical runs.
 // ==========================================
 
 export async function replaceRunData(
@@ -260,21 +293,25 @@ export async function replaceRunData(
   );
 
   if (runCheck.rowCount !== 1) {
-    throw new Error(`Sync run not found or market mismatch: ${runId}`);
+    throw new Error(
+      `Sync run not found or market mismatch: ${runId}`
+    );
   }
 
-  const c = await pool.connect();
+  const client = await pool.connect();
 
   try {
-    await c.query('BEGIN');
+    await client.query('BEGIN');
 
     // CATALOG
     for (const [sid, rows] of listingByShop) {
-      for (const x of rows) {
-        const identityKey =
-          `${x.asin || ''}|${x.msku || ''}`;
+      for (const item of rows) {
+        const asin = normalizeAsin(item.asin);
+        const msku = clean(item.msku);
 
-        await c.query(`
+        const identityKey = `${asin}|${msku}`;
+
+        await client.query(`
           INSERT INTO catalog_items (
             shop_id, market_code, currency_code,
             identity_key, asin, msku, local_sku,
@@ -288,6 +325,8 @@ export async function replaceRunData(
           DO UPDATE SET
             market_code = EXCLUDED.market_code,
             currency_code = EXCLUDED.currency_code,
+            asin = EXCLUDED.asin,
+            msku = EXCLUDED.msku,
             local_sku = EXCLUDED.local_sku,
             title = EXCLUDED.title,
             image_url = EXCLUDED.image_url,
@@ -297,43 +336,43 @@ export async function replaceRunData(
             raw = EXCLUDED.raw,
             updated_at = now()
         `, [
-          sid,
+          String(sid),
           marketCode,
           currencyCode,
           identityKey,
-          x.asin || null,
-          x.msku || null,
-          x.local_sku || null,
-          x.local_name || x.item_name || x.product_name || null,
-          x.small_image_url || null,
-          x.category_text || x.category || 'Other',
-          String(x.status_text || x.status || 'Unknown'),
+          asin || null,
+          msku || null,
+          item.local_sku || null,
+          item.local_name || item.item_name || item.product_name || null,
+          item.small_image_url || null,
+          item.category_text || item.category || 'Other',
+          String(item.status_text || item.status || 'Unknown'),
           runId,
-          JSON.stringify(x)
+          JSON.stringify(item)
         ]);
       }
     }
 
     // SALES
     for (const [sid, period, rows] of salesByShop) {
-      for (const x of rows) {
-        const units = Number(
-          String(x?.date1?.volume ?? 0).replaceAll(',', '')
-        ) || 0;
+      for (const item of rows) {
+        const units = numeric(
+          String(item?.date1?.volume ?? 0).replaceAll(',', '')
+        );
 
-        const previous = Number(
+        const previous = numeric(
           String(
-            x?._previous_units ?? x?.date2?.volume ?? 0
+            item?._previous_units ?? item?.date2?.volume ?? 0
           ).replaceAll(',', '')
-        ) || 0;
+        );
 
         const sellerSku = (
-          Array.isArray(x.seller_sku)
-            ? x.seller_sku[0]
-            : x.seller_sku
-        ) || x.msku || null;
+          Array.isArray(item.seller_sku)
+            ? item.seller_sku[0]
+            : item.seller_sku
+        ) || item.msku || null;
 
-        await c.query(`
+        await client.query(`
           INSERT INTO sales_snapshots (
             run_id, shop_id, market_code, currency_code,
             period_days, seller_sku, asin,
@@ -342,23 +381,23 @@ export async function replaceRunData(
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
         `, [
           runId,
-          sid,
+          String(sid),
           marketCode,
           currencyCode,
           period,
           sellerSku,
-          x.asin || null,
+          normalizeAsin(item.asin) || null,
           units,
           previous,
-          JSON.stringify(x)
+          JSON.stringify(item)
         ]);
       }
     }
 
     // INVENTORY
     for (const [sid, rows] of stockByShop) {
-      for (const x of rows) {
-        await c.query(`
+      for (const item of rows) {
+        await client.query(`
           INSERT INTO inventory_snapshots (
             run_id, shop_id, market_code, currency_code,
             asin, local_sku, seller_sku,
@@ -367,157 +406,35 @@ export async function replaceRunData(
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
         `, [
           runId,
-          sid,
+          String(sid),
           marketCode,
           currencyCode,
-          x.asin || null,
-          x.sku || x.local_sku || null,
-          x.seller_sku || null,
-          Number(x.afn_fulfillable_quantity) || 0,
-          Number(x.afn_reserved_quantity) || 0,
-          JSON.stringify(x)
+          normalizeAsin(item.asin) || null,
+          item.sku || item.local_sku || null,
+          item.seller_sku || null,
+          numeric(item.afn_fulfillable_quantity),
+          numeric(item.afn_reserved_quantity),
+          JSON.stringify(item)
         ]);
       }
     }
 
-    await c.query('COMMIT');
+    await client.query('COMMIT');
 
   } catch (error) {
-    await c.query('ROLLBACK');
+    await client.query('ROLLBACK');
     throw error;
 
   } finally {
-    c.release();
+    client.release();
   }
 }
 
 // ==========================================
-// SALES LOOKUP
-// SKU FIRST; ASIN FALLBACK ONLY WITHOUT SKU
-// ==========================================
-
-async function getSalesForSku(
-  marketCode,
-  runId,
-  shopId,
-  period,
-  asin,
-  sellerSku
-) {
-  const result = await pool.query(`
-    SELECT
-      COALESCE(SUM(units), 0) AS units,
-      COALESCE(SUM(previous_units), 0) AS prev
-    FROM sales_snapshots
-    WHERE market_code = $1
-      AND run_id = $2
-      AND shop_id = $3
-      AND period_days = $4
-      AND (
-        ($5::text IS NOT NULL AND seller_sku = $5)
-        OR
-        ($5::text IS NULL AND $6::text IS NOT NULL AND asin = $6)
-      )
-  `, [
-    marketCode,
-    runId,
-    shopId,
-    period,
-    sellerSku || null,
-    asin || null
-  ]);
-
-  return {
-    units: Number(result.rows[0].units),
-    prev: Number(result.rows[0].prev)
-  };
-}
-
-// ==========================================
-// INVENTORY LOOKUP
-// MATCH SELLER SKU, THEN LOCAL SKU, THEN ASIN
-// ==========================================
-
-async function getInventoryForSku(
-  marketCode,
-  runId,
-  shopId,
-  asin,
-  sellerSku,
-  localSku
-) {
-  const base = `
-    SELECT
-      COUNT(*)::int AS rows,
-      COALESCE(SUM(available), 0) AS available,
-      COALESCE(SUM(reserved), 0) AS reserved
-    FROM inventory_snapshots
-    WHERE market_code = $1
-      AND run_id = $2
-      AND shop_id = $3
-  `;
-
-  const params = [marketCode, runId, shopId];
-
-  // First: exact Seller SKU match.
-  if (sellerSku) {
-    const r = await pool.query(
-      base + ' AND seller_sku = $4',
-      [...params, sellerSku]
-    );
-
-    if (Number(r.rows[0].rows) > 0) {
-      return {
-        rows: Number(r.rows[0].rows),
-        available: Number(r.rows[0].available),
-        reserved: Number(r.rows[0].reserved),
-        matchedBy: 'seller_sku'
-      };
-    }
-  }
-
-  // Second: inventory SKU is stored as local_sku.
-  if (localSku) {
-    const r = await pool.query(
-      base + ' AND local_sku = $4',
-      [...params, localSku]
-    );
-
-    if (Number(r.rows[0].rows) > 0) {
-      return {
-        rows: Number(r.rows[0].rows),
-        available: Number(r.rows[0].available),
-        reserved: Number(r.rows[0].reserved),
-        matchedBy: 'local_sku'
-      };
-    }
-  }
-
-  // Last resort: ASIN fallback.
-  if (asin) {
-    const r = await pool.query(
-      base + ' AND asin = $4',
-      [...params, asin]
-    );
-
-    return {
-      rows: Number(r.rows[0].rows),
-      available: Number(r.rows[0].available),
-      reserved: Number(r.rows[0].reserved),
-      matchedBy: Number(r.rows[0].rows) > 0 ? 'asin' : 'none'
-    };
-  }
-
-  return {
-    rows: 0,
-    available: 0,
-    reserved: 0,
-    matchedBy: 'none'
-  };
-}
-
-// ==========================================
-// MARKET DASHBOARD
+// CONSOLIDATED MARKET DASHBOARD
+// US = all four stores combined
+// AU = independent Australian market
+// Product identity = ASIN
 // ==========================================
 
 export async function getDashboard(marketCode = 'US') {
@@ -526,10 +443,13 @@ export async function getDashboard(marketCode = 'US') {
   }
 
   const run = await latestRun(marketCode);
-
   if (!run) return null;
 
-  const catalog = await pool.query(`
+  // ------------------------------------------
+  // 1. CATALOG
+  // ------------------------------------------
+
+  const catalogResult = await pool.query(`
     SELECT
       shop_id,
       market_code,
@@ -547,131 +467,416 @@ export async function getDashboard(marketCode = 'US') {
     ORDER BY title
   `, [marketCode, run.id]);
 
-  const items = [];
+  const catalogRows = catalogResult.rows;
 
-  for (const x of catalog.rows) {
-    const [s7, s30, s90, inv] = await Promise.all([
-      getSalesForSku(
-        marketCode, run.id, x.shop_id, 7, x.asin, x.msku
-      ),
-      getSalesForSku(
-        marketCode, run.id, x.shop_id, 30, x.asin, x.msku
-      ),
-      getSalesForSku(
-        marketCode, run.id, x.shop_id, 90, x.asin, x.msku
-      ),
-      getInventoryForSku(
-        marketCode,
-        run.id,
-        x.shop_id,
-        x.asin,
-        x.msku,
-        x.local_sku
-      )
-    ]);
+  const products = new Map();
+  const skuToAsin = new Map();
+  const localSkuToAsin = new Map();
+  const shopListingCounts = new Map();
 
-    const available = inv.available;
-    const units30 = s30.units;
-    const velocity = units30 / 30;
+  for (const row of catalogRows) {
+    const asin = normalizeAsin(row.asin);
+    const shopId = String(row.shop_id);
 
-    const listingStatus = String(
-      x.listing_status || 'Unknown'
+    if (!asin) continue;
+
+    shopListingCounts.set(
+      shopId,
+      (shopListingCounts.get(shopId) || 0) + 1
     );
 
-    const normalizedStatus = listingStatus.toLowerCase();
+    const key = `ASIN:${asin}`;
 
-    const inactive = [
-      'inactive',
-      '停售',
-      '已停售',
-      'deleted'
-    ].some(value => normalizedStatus.includes(value));
+    let item = products.get(key);
 
-    items.push({
-      id: `${marketCode}|${x.shop_id}|${x.asin || ''}|${x.msku || ''}`,
+    if (!item) {
+      item = {
+        id: asin,
+        asin,
+        marketCode,
+        currencyCode: row.currency_code,
 
-      marketCode,
-      currencyCode: x.currency_code,
+        title: validTitle(row.title),
+        imageUrl: row.image_url || null,
+        category: row.category || 'Other',
 
-      shopId: x.shop_id,
-      asin: x.asin,
-      sku: x.msku,
-      localSku: x.local_sku,
+        sku: row.msku || null,
+        localSku: row.local_sku || null,
 
-      title: x.title,
-      imageUrl: x.image_url,
-      category: x.category,
-      listingStatus,
+        sellerSkus: [],
+        localSkus: [],
+        shopIds: [],
 
-      sales7: s7.units,
-      previousSales7: s7.prev,
-      growth7: s7.prev > 0
-        ? ((s7.units - s7.prev) / s7.prev) * 100
-        : null,
+        listingCount: 0,
+        listingStatuses: [],
 
-      sales30: units30,
-      previousSales30: s30.prev,
-      growth30: s30.prev > 0
-        ? ((units30 - s30.prev) / s30.prev) * 100
-        : null,
+        sales7: 0,
+        previousSales7: 0,
+        sales30: 0,
+        previousSales30: 0,
+        sales90: 0,
+        previousSales90: 0,
 
-      sales90: s90.units,
-      previousSales90: s90.prev,
+        availableStock: 0,
+        reservedStock: 0,
+        inventoryRows: 0
+      };
 
-      availableStock: inv.rows > 0 ? available : null,
-      reservedStock: inv.rows > 0 ? inv.reserved : null,
-      inventoryMatchedBy: inv.matchedBy,
+      products.set(key, item);
+    }
 
-      daysOfCover: velocity > 0
-        ? available / velocity
-        : null,
+    item.listingCount += 1;
 
-      status: inv.rows === 0
-        ? 'unknown'
-        : available === 0
-          ? 'stockout'
-          : velocity > 0 && available / velocity < config.lowStockDays
-            ? 'low'
-            : 'healthy',
+    if (!item.title && validTitle(row.title)) {
+      item.title = validTitle(row.title);
+    }
 
-      isInactive: inactive
-    });
+    if (!item.imageUrl && row.image_url) {
+      item.imageUrl = row.image_url;
+    }
+
+    if (
+      (!item.category || item.category === 'Other') &&
+      row.category
+    ) {
+      item.category = row.category;
+    }
+
+    if (row.msku && !item.sellerSkus.includes(row.msku)) {
+      item.sellerSkus.push(row.msku);
+    }
+
+    if (
+      row.local_sku &&
+      !item.localSkus.includes(row.local_sku)
+    ) {
+      item.localSkus.push(row.local_sku);
+    }
+
+    if (!item.sku && row.msku) item.sku = row.msku;
+    if (!item.localSku && row.local_sku) {
+      item.localSku = row.local_sku;
+    }
+
+    if (!item.shopIds.includes(shopId)) {
+      item.shopIds.push(shopId);
+    }
+
+    if (row.listing_status) {
+      item.listingStatuses.push(row.listing_status);
+    }
+
+    if (row.msku) {
+      skuToAsin.set(
+        `${shopId}|${normalizeSku(row.msku)}`,
+        asin
+      );
+    }
+
+    if (row.local_sku) {
+      localSkuToAsin.set(
+        `${shopId}|${normalizeSku(row.local_sku)}`,
+        asin
+      );
+    }
   }
 
-  const shops = await pool.query(`
+  // ------------------------------------------
+  // 2. SALES
+  // ------------------------------------------
+
+  const salesResult = await pool.query(`
     SELECT
       shop_id,
-      COUNT(*)::int AS count
-    FROM catalog_items
+      period_days,
+      seller_sku,
+      asin,
+      units,
+      previous_units
+    FROM sales_snapshots
     WHERE market_code = $1
-      AND last_seen_run_id = $2
-    GROUP BY shop_id
-    ORDER BY shop_id
+      AND run_id = $2
+      AND period_days IN (7, 30, 90)
   `, [marketCode, run.id]);
+
+  for (const row of salesResult.rows) {
+    const shopId = String(row.shop_id);
+    const sellerSku = clean(row.seller_sku);
+
+    let asin = normalizeAsin(row.asin);
+
+    if (!asin && sellerSku) {
+      asin = skuToAsin.get(
+        `${shopId}|${normalizeSku(sellerSku)}`
+      ) || '';
+    }
+
+    if (!asin) continue;
+
+    const item = products.get(`ASIN:${asin}`);
+    if (!item) continue;
+
+    const period = Number(row.period_days);
+    const units = numeric(row.units);
+    const previous = numeric(row.previous_units);
+
+    if (period === 7) {
+      item.sales7 += units;
+      item.previousSales7 += previous;
+    } else if (period === 30) {
+      item.sales30 += units;
+      item.previousSales30 += previous;
+    } else if (period === 90) {
+      item.sales90 += units;
+      item.previousSales90 += previous;
+    }
+
+    if (
+      sellerSku &&
+      !item.sellerSkus.includes(sellerSku)
+    ) {
+      item.sellerSkus.push(sellerSku);
+    }
+
+    if (!item.shopIds.includes(shopId)) {
+      item.shopIds.push(shopId);
+    }
+  }
+
+  // ------------------------------------------
+  // 3. INVENTORY
+  // ------------------------------------------
+
+  const inventoryResult = await pool.query(`
+    SELECT
+      shop_id,
+      asin,
+      local_sku,
+      seller_sku,
+      available,
+      reserved
+    FROM inventory_snapshots
+    WHERE market_code = $1
+      AND run_id = $2
+  `, [marketCode, run.id]);
+
+  for (const row of inventoryResult.rows) {
+    const shopId = String(row.shop_id);
+    const sellerSku = clean(row.seller_sku);
+    const localSku = clean(row.local_sku);
+
+    let asin = normalizeAsin(row.asin);
+
+    if (!asin && sellerSku) {
+      asin = skuToAsin.get(
+        `${shopId}|${normalizeSku(sellerSku)}`
+      ) || '';
+    }
+
+    if (!asin && localSku) {
+      asin = localSkuToAsin.get(
+        `${shopId}|${normalizeSku(localSku)}`
+      ) || '';
+    }
+
+    if (!asin) continue;
+
+    const item = products.get(`ASIN:${asin}`);
+    if (!item) continue;
+
+    item.availableStock += numeric(row.available);
+    item.reservedStock += numeric(row.reserved);
+    item.inventoryRows += 1;
+  }
+
+  // ------------------------------------------
+  // 4. PRODUCT METRICS
+  // ------------------------------------------
+
+  const items = [...products.values()].map(item => {
+    const velocity = item.sales30 / 30;
+
+    const daysOfCover =
+      velocity > 0
+        ? item.availableStock / velocity
+        : null;
+
+    const statuses = item.listingStatuses.map(
+      value => clean(value).toLowerCase()
+    );
+
+    const isInactive =
+      statuses.length > 0 &&
+      statuses.every(status =>
+        ['inactive', '停售', '已停售', 'deleted', '0'].includes(status)
+      );
+
+    let status = 'unknown';
+
+    if (item.inventoryRows > 0) {
+      if (item.availableStock === 0) {
+        status = 'stockout';
+      } else if (item.sales30 === 0) {
+        status = 'no_sales';
+      } else if (
+        daysOfCover !== null &&
+        daysOfCover < config.lowStockDays
+      ) {
+        status = 'low';
+      } else {
+        status = 'healthy';
+      }
+    }
+
+    return {
+      ...item,
+
+      shopIds: [...new Set(item.shopIds)].sort(),
+      sellerSkus: [...new Set(item.sellerSkus)],
+      localSkus: [...new Set(item.localSkus)],
+
+      shopCount: new Set(item.shopIds).size,
+
+      salesGrowth7: growthRate(
+        item.sales7,
+        item.previousSales7
+      ),
+
+      salesGrowth30: growthRate(
+        item.sales30,
+        item.previousSales30
+      ),
+
+      salesGrowth90: growthRate(
+        item.sales90,
+        item.previousSales90
+      ),
+
+      dailyVelocity: velocity,
+      daysOfCover,
+
+      availableStock:
+        item.inventoryRows > 0
+          ? item.availableStock
+          : null,
+
+      reservedStock:
+        item.inventoryRows > 0
+          ? item.reservedStock
+          : null,
+
+      status,
+      isInactive
+    };
+  });
+
+  // ------------------------------------------
+  // 5. MARKET RANKING
+  // ------------------------------------------
+
+  items.sort((a, b) => b.sales30 - a.sales30);
+
+  items.forEach((item, index) => {
+    item.rank = index + 1;
+  });
+
+  const previousRanked = [...items].sort(
+    (a, b) => b.previousSales30 - a.previousSales30
+  );
+
+  const previousRankMap = new Map(
+    previousRanked.map((item, index) => [
+      item.id,
+      index + 1
+    ])
+  );
+
+  items.forEach(item => {
+    item.previousRank = previousRankMap.get(item.id) ?? null;
+    item.rankChange =
+      item.previousRank == null
+        ? null
+        : item.previousRank - item.rank;
+  });
+
+  // ------------------------------------------
+  // 6. MARKET TOTALS
+  // ------------------------------------------
+
+  const total = field =>
+    items.reduce(
+      (sum, item) => sum + numeric(item[field]),
+      0
+    );
+
+  const shopCounts = [...shopListingCounts.entries()]
+    .map(([shop_id, count]) => ({
+      shop_id,
+      count
+    }))
+    .sort((a, b) => a.shop_id.localeCompare(b.shop_id));
+
+  const totalListings = catalogRows.length;
 
   return {
     meta: {
       source: 'LingXing MCP',
-      marketplace: marketCode === 'US'
-        ? 'Amazon US'
-        : 'Amazon Australia',
+
+      marketplace:
+        marketCode === 'US'
+          ? 'Amazon US'
+          : 'Amazon Australia',
 
       marketCode,
       currencyCode: run.currency_code,
       generatedAt: run.finished_at,
       isMock: false,
 
+      aggregation: 'ASIN',
+      consolidated: true,
+
       catalogCount: items.length,
+      listingCount: totalListings,
 
       zeroSalesCount: items.filter(
-        x => !x.sales7 && !x.sales30
+        item => item.sales7 === 0 && item.sales30 === 0
       ).length,
 
       inactiveCount: items.filter(
-        x => x.isInactive
+        item => item.isInactive
       ).length,
 
-      shopCounts: shops.rows,
+      sales7: total('sales7'),
+      previousSales7: total('previousSales7'),
+      salesGrowth7: growthRate(
+        total('sales7'),
+        total('previousSales7')
+      ),
+
+      sales30: total('sales30'),
+      previousSales30: total('previousSales30'),
+      salesGrowth30: growthRate(
+        total('sales30'),
+        total('previousSales30')
+      ),
+
+      sales90: total('sales90'),
+      previousSales90: total('previousSales90'),
+      salesGrowth90: growthRate(
+        total('sales90'),
+        total('previousSales90')
+      ),
+
+      dailyAverage30: total('sales30') / 30,
+
+      availableStock: total('availableStock'),
+      reservedStock: total('reservedStock'),
+
+      inventoryAlertCount: items.filter(
+        item => ['low', 'stockout'].includes(item.status)
+      ).length,
+
+      shopCounts,
       runMetrics: run.metrics
     },
 
@@ -681,8 +886,8 @@ export async function getDashboard(marketCode = 'US') {
 
 // ==========================================
 // GLOBAL OVERVIEW
-// Sales values are UNITS, not revenue.
 // US and AU remain separate.
+// Currency values are never combined.
 // ==========================================
 
 export async function getGlobalOverview() {
@@ -696,45 +901,52 @@ export async function getGlobalOverview() {
         available: false,
         marketCode,
         currencyCode: config.markets[marketCode].currency,
-        shopCounts: [],
         data: {
           catalogCount: 0,
+          listingCount: 0,
           zeroSalesCount: 0,
           inactiveCount: 0,
           sales7: 0,
           sales30: 0,
-          sales90: 0
+          sales90: 0,
+          availableStock: 0,
+          reservedStock: 0
         }
       };
 
       continue;
     }
 
-    const items = dashboard.items;
-
     markets[marketCode] = {
       available: true,
       marketCode,
       currencyCode: dashboard.meta.currencyCode,
       generatedAt: dashboard.meta.generatedAt,
-      shopCounts: dashboard.meta.shopCounts,
 
       data: {
         catalogCount: dashboard.meta.catalogCount,
+        listingCount: dashboard.meta.listingCount,
         zeroSalesCount: dashboard.meta.zeroSalesCount,
         inactiveCount: dashboard.meta.inactiveCount,
 
-        sales7: items.reduce(
-          (sum, item) => sum + item.sales7, 0
-        ),
+        sales7: dashboard.meta.sales7,
+        sales30: dashboard.meta.sales30,
+        sales90: dashboard.meta.sales90,
 
-        sales30: items.reduce(
-          (sum, item) => sum + item.sales30, 0
-        ),
+        previousSales7: dashboard.meta.previousSales7,
+        previousSales30: dashboard.meta.previousSales30,
+        previousSales90: dashboard.meta.previousSales90,
 
-        sales90: items.reduce(
-          (sum, item) => sum + item.sales90, 0
-        )
+        salesGrowth7: dashboard.meta.salesGrowth7,
+        salesGrowth30: dashboard.meta.salesGrowth30,
+        salesGrowth90: dashboard.meta.salesGrowth90,
+
+        dailyAverage30: dashboard.meta.dailyAverage30,
+
+        availableStock: dashboard.meta.availableStock,
+        reservedStock: dashboard.meta.reservedStock,
+
+        inventoryAlertCount: dashboard.meta.inventoryAlertCount
       }
     };
   }
