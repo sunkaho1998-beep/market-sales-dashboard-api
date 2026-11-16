@@ -107,7 +107,7 @@ const TEXT = {
     language: 'Language',
     currency: 'Currency',
     units: 'Units sold, not revenue.',
-    globalNote: 'US and AU are reported independently. USD and AUD are never combined.',
+    globalNote: 'United States marketplace overview.',
     watchSaved: 'Saved in this browser.',
     market: 'Market',
     rank: 'Rank',
@@ -118,7 +118,7 @@ const TEXT = {
     stable: 'Stable High-sellers',
     revival: 'Potential Revival',
     declining: 'Declining Products',
-    footer: 'Internal Keychron operations data. Markets and currencies remain separate.',
+    footer: 'Internal Keychron United States operations data.',
     open: 'Open'
   },
 
@@ -211,7 +211,7 @@ const TEXT = {
     language: '语言',
     currency: '报表币种',
     units: '销量单位，不代表销售额。',
-    globalNote: '美国与澳洲分别统计，USD 与 AUD 不直接相加。',
+    globalNote: '美国站整体经营数据与商品表现。',
     watchSaved: '关注清单保存在当前浏览器。',
     market: '市场',
     rank: '排名',
@@ -222,7 +222,7 @@ const TEXT = {
     stable: '稳定畅销商品',
     revival: '潜力复苏商品',
     declining: '下滑商品',
-    footer: 'Keychron 内部运营数据 · 市场与币种独立统计。',
+    footer: 'Keychron 美国站内部运营数据。',
     open: '查看'
   }
 };
@@ -551,8 +551,7 @@ function ComparisonTable({ records, t, onRemove, onClear }) {
       </div>
     </section>
   );
-}
-
+  
 function App() {
   const [lang, setLang] = useState(
     () => localStorage.getItem(LANG_KEY) || 'en'
@@ -561,8 +560,8 @@ function App() {
   const t = TEXT[lang] || TEXT.en;
 
   const [authed, setAuthed] = useState(false);
-  const [activePage, setActivePage] = useState('global');
-  const [market, setMarket] = useState('GLOBAL');
+  const [activePage, setActivePage] = useState('us');
+  const [market, setMarket] = useState('US');
 
   const [marketData, setMarketData] = useState({
     US: null,
@@ -579,6 +578,19 @@ function App() {
   const [category, setCategory] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [period, setPeriod] = useState(30);
+
+  const [sectionOpen, setSectionOpen] = useState({
+    productList: true,
+    salesGrowth: true,
+    inventoryHealth: true
+  });
+
+  function toggleSection(section) {
+    setSectionOpen(old => ({
+      ...old,
+      [section]: !old[section]
+    }));
+  }
 
   const [watchRecords, setWatchRecords] = useState(() => {
     try {
@@ -636,17 +648,13 @@ function App() {
 
     try {
       if (market === 'GLOBAL') {
-        const [data, usStatus, auStatus] = await Promise.all([
+        const [data, usStatus] = await Promise.all([
           requestJson('/api/partner/global-overview'),
-          requestJson('/api/partner/status?market=US'),
-          requestJson('/api/partner/status?market=AU')
+          requestJson('/api/partner/status?market=US')
         ]);
 
         setOverview(data);
-        setStatuses({
-          US: usStatus,
-          AU: auStatus
-        });
+        setStatuses({ US: usStatus });
       } else {
         const [dashboard, status] = await Promise.all([
           requestJson(`/api/partner/dashboard?market=${market}`),
@@ -684,6 +692,13 @@ function App() {
     if (authed) loadCurrent();
   }, [authed, market]);
 
+  useEffect(() => {
+    if (market !== 'GLOBAL' && market !== 'US') {
+      setMarket('US');
+      setActivePage('us');
+    }
+  }, [market]);
+
   const currentDashboard =
     market === 'GLOBAL' ? null : marketData[market];
 
@@ -696,15 +711,17 @@ function App() {
     return marketItems.filter(item => {
       const cat = String(item.category || '').toLowerCase();
 
+      const isKeyboard =
+        cat.includes('keyboard') || cat.includes('键盘');
+
+      const isMouse =
+        cat.includes('mouse') || cat.includes('鼠标');
+
       const categoryOk =
         category === 'all' ||
-        (category === 'keyboard' && cat.includes('keyboard')) ||
-        (category === 'mouse' && cat.includes('mouse')) ||
-        (
-          category === 'accessory' &&
-          !cat.includes('keyboard') &&
-          !cat.includes('mouse')
-        );
+        (category === 'keyboard' && isKeyboard) ||
+        (category === 'mouse' && isMouse) ||
+        (category === 'accessory' && !isKeyboard && !isMouse);
 
       const statusOk =
         statusFilter === 'all' ||
@@ -737,13 +754,10 @@ function App() {
     .map(record => record.item);
 
   function selectMarket(code) {
-    setMarket(code);
+    if (code !== 'US') return;
 
-    setActivePage(
-      code === 'US' ? 'us' :
-      code === 'AU' ? 'au' :
-      'global'
-    );
+    setMarket('US');
+    setActivePage('us');
 
     setQuery('');
     setCategory('all');
@@ -817,16 +831,15 @@ function App() {
 
   const navGroups = [
     {
-      title: t.markets,
-      items: [
-        { id: 'us', label: t.us, icon: Flag },
-        { id: 'au', label: t.au, icon: Flag }
-      ]
-    },
-    {
       title: t.overviewGroup,
       items: [
         { id: 'global', label: t.global, icon: LayoutDashboard }
+      ]
+    },
+    {
+      title: t.markets,
+      items: [
+        { id: 'us', label: t.us, icon: Flag }
       ]
     },
     {
@@ -850,13 +863,9 @@ function App() {
   const pageTitle =
     navGroups.flatMap(group => group.items)
       .find(item => item.id === activePage)?.label ||
-    (
-      market === 'US' ? t.us :
-      market === 'AU' ? t.au :
-      t.global
-    );
+    (market === 'US' ? t.us : t.global);
 
-  const marketCurrency = market === 'AU' ? 'AUD' : 'USD';
+  const marketCurrency = 'USD';
 
   const salesField =
     period === 7 ? 'sales7' :
@@ -886,7 +895,6 @@ function App() {
 
   const summaryData = overview?.markets || {};
   const usData = summaryData.US?.data || {};
-  const auData = summaryData.AU?.data || {};
 
   return (
     <div className="app-shell">
@@ -919,8 +927,8 @@ function App() {
                     activePage === item.id ? 'active' : ''
                   }`}
                   onClick={() =>
-                    item.id === 'us' || item.id === 'au'
-                      ? selectMarket(item.id.toUpperCase())
+                    item.id === 'us'
+                      ? selectMarket('US')
                       : selectPage(item.id)
                   }
                 >
@@ -1013,7 +1021,7 @@ function App() {
               <div className="eyebrow">
                 KEYCHRON · {
                   market === 'GLOBAL'
-                    ? 'GLOBAL OPERATIONS'
+                    ? 'UNITED STATES OPERATIONS'
                     : market
                 }
               </div>
@@ -1053,7 +1061,7 @@ function App() {
             </div>
           )}
 
-          {/* GLOBAL OVERVIEW */}
+          {/* GLOBAL OVERVIEW: US ONLY */}
 
           {activePage === 'global' && (
             <>
@@ -1064,12 +1072,6 @@ function App() {
                     data: usData,
                     label: t.us,
                     currency: 'USD'
-                  },
-                  {
-                    code: 'AU',
-                    data: auData,
-                    label: t.au,
-                    currency: 'AUD'
                   }
                 ].map(m => (
                   <article
@@ -1131,7 +1133,7 @@ function App() {
                           : t.notSynced}
                       </span>
 
-                      <button onClick={() => selectMarket(m.code)}>
+                      <button onClick={() => selectMarket('US')}>
                         {t.open} <ArrowUpRight size={15}/>
                       </button>
                     </div>
@@ -1154,120 +1156,242 @@ function App() {
             </>
           )}
 
-          {/* US AND AU MARKET DASHBOARDS */}
+          {/* UNITED STATES DASHBOARD */}
 
-          {(market === 'US' || market === 'AU') &&
-            ['us', 'au'].includes(activePage) && (
-              <>
-                <section className="metric-grid">
-                  <Metric
-                    label={t.products}
-                    value={currentMeta.catalogCount}
-                    icon={Package}
-                  />
+          {market === 'US' && activePage === 'us' && (
+            <>
+              <section className="metric-grid">
+                <Metric
+                  label={t.products}
+                  value={currentMeta.catalogCount}
+                  icon={Package}
+                />
 
-                  <Metric
-                    label={t.sales7}
-                    value={currentMeta.sales7}
-                    icon={TrendingUp}
-                    growth={currentMeta.salesGrowth7}
-                  />
+                <Metric
+                  label={t.sales7}
+                  value={currentMeta.sales7}
+                  icon={TrendingUp}
+                  growth={currentMeta.salesGrowth7}
+                />
 
-                  <Metric
-                    label={t.sales30}
-                    value={currentMeta.sales30}
-                    icon={Activity}
-                    growth={currentMeta.salesGrowth30}
-                  />
+                <Metric
+                  label={t.sales30}
+                  value={currentMeta.sales30}
+                  icon={Activity}
+                  growth={currentMeta.salesGrowth30}
+                />
 
-                  <Metric
-                    label={t.sales90}
-                    value={currentMeta.sales90}
-                    icon={BarChart3}
-                    growth={currentMeta.salesGrowth90}
-                  />
+                <Metric
+                  label={t.sales90}
+                  value={currentMeta.sales90}
+                  icon={BarChart3}
+                  growth={currentMeta.salesGrowth90}
+                />
 
-                  <Metric
-                    label={t.average}
-                    value={currentMeta.dailyAverage30}
-                    icon={Activity}
-                  />
+                <Metric
+                  label={t.average}
+                  value={currentMeta.dailyAverage30}
+                  icon={Activity}
+                />
 
-                  <Metric
-                    label={t.available}
-                    value={currentMeta.availableStock}
-                    icon={Boxes}
-                  />
+                <Metric
+                  label={t.available}
+                  value={currentMeta.availableStock}
+                  icon={Boxes}
+                />
 
-                  <Metric
-                    label={t.reserved}
-                    value={currentMeta.reservedStock}
-                    icon={Warehouse}
-                  />
+                <Metric
+                  label={t.reserved}
+                  value={currentMeta.reservedStock}
+                  icon={Warehouse}
+                />
 
-                  <Metric
-                    label={t.alerts}
-                    value={currentMeta.inventoryAlertCount}
-                    icon={AlertTriangle}
-                    tone="orange"
-                  />
-                </section>
+                <Metric
+                  label={t.alerts}
+                  value={currentMeta.inventoryAlertCount}
+                  icon={AlertTriangle}
+                  tone="orange"
+                />
+              </section>
 
-                {/* SALES PERFORMANCE */}
-
-                <section className="section-card">
-                  <div className="section-heading">
-                    <div>
-                      <h2>{t.salesTrend}</h2>
-                      <p>{t.units}</p>
-                    </div>
-
-                    <div className="period-toolbar">
-                      {[7, 30, 90].map(p => (
-                        <button
-                          key={p}
-                          className={period === p ? 'active' : ''}
-                          onClick={() => setPeriod(p)}
-                        >
-                          {p}D
-                        </button>
-                      ))}
-                    </div>
+              {/* PRODUCT LIST */}
+              <section className="section-card">
+                <div className="section-heading">
+                  <div>
+                    <h2>{t.catalog}</h2>
+                    <p>
+                      {fmt(currentMeta.catalogCount)} {t.products}
+                      {' · US · ASIN Consolidated'}
+                    </p>
                   </div>
 
-                  <div className="chart-area">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={topProducts}>
-                        <CartesianGrid strokeDasharray="3 3"/>
-                        <XAxis dataKey="name" hide/>
-                        <YAxis/>
-                        <Tooltip/>
-                        <Bar
-                          dataKey="units"
-                          fill="#2775c7"
-                          radius={[5, 5, 0, 0]}
+                  <button
+                    type="button"
+                    className="section-toggle"
+                    aria-label="Toggle product list"
+                    aria-expanded={sectionOpen.productList}
+                    onClick={() => toggleSection('productList')}
+                  >
+                    <ChevronRight
+                      size={20}
+                      style={{
+                        transform: sectionOpen.productList
+                          ? 'rotate(90deg)'
+                          : 'rotate(0deg)',
+                        transition: 'transform 0.2s'
+                      }}
+                    />
+                  </button>
+                </div>
+
+                {sectionOpen.productList && (
+                  <>
+                    <div className="table-filters">
+                      <label className="search-box">
+                        <Search size={16}/>
+                        <input
+                          value={query}
+                          onChange={e => setQuery(e.target.value)}
+                          placeholder={t.search}
                         />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
+                      </label>
 
-                  <p className="market-disclaimer">
-                    Product ranking by selected period.
-                    Daily historical sales series are not available
-                    in the current API response.
-                  </p>
-                </section>
+                      <select
+                        value={category}
+                        onChange={e => setCategory(e.target.value)}
+                      >
+                        <option value="all">{t.allCategories}</option>
+                        <option value="keyboard">{t.keyboard}</option>
+                        <option value="mouse">{t.mouse}</option>
+                        <option value="accessory">{t.accessories}</option>
+                      </select>
 
-                {/* INVENTORY HEALTH */}
-
-                <section className="section-card">
-                  <div className="section-heading">
-                    <div>
-                      <h2>{t.inventoryHealth}</h2>
-                      <p>{t.inventoryCoverage}</p>
+                      <select
+                        value={statusFilter}
+                        onChange={e => setStatusFilter(e.target.value)}
+                      >
+                        <option value="all">{t.allStatuses}</option>
+                        <option value="active">{t.active}</option>
+                        <option value="inactive">{t.inactive}</option>
+                        <option value="low">{t.lowStock}</option>
+                        <option value="stockout">{t.stockout}</option>
+                        <option value="zero">{t.zeroSales}</option>
+                      </select>
                     </div>
+
+                    <ProductTable
+                      items={filteredItems}
+                      t={t}
+                      watched={watched}
+                      compared={compared}
+                      onWatch={toggleWatch}
+                      onCompare={toggleCompare}
+                    />
+                  </>
+                )}
+              </section>
+
+              {/* SALES & GROWTH ANALYSIS */}
+              <section className="section-card">
+                <div className="section-heading">
+                  <div>
+                    <h2>{t.salesTrend}</h2>
+                    <p>{t.units}</p>
                   </div>
 
+                  <div className="section-heading-actions">
+                    {sectionOpen.salesGrowth && (
+                      <div className="period-toolbar">
+                        {[7, 30, 90].map(p => (
+                          <button
+                            key={p}
+                            type="button"
+                            className={period === p ? 'active' : ''}
+                            onClick={() => setPeriod(p)}
+                          >
+                            {p}D
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      className="section-toggle"
+                      aria-label="Toggle sales and growth analysis"
+                      aria-expanded={sectionOpen.salesGrowth}
+                      onClick={() => toggleSection('salesGrowth')}
+                    >
+                      <ChevronRight
+                        size={20}
+                        style={{
+                          transform: sectionOpen.salesGrowth
+                            ? 'rotate(90deg)'
+                            : 'rotate(0deg)',
+                          transition: 'transform 0.2s'
+                        }}
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                {sectionOpen.salesGrowth && (
+                  <>
+                    <div className="chart-area">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={topProducts}>
+                          <CartesianGrid strokeDasharray="3 3"/>
+                          <XAxis dataKey="name" hide/>
+                          <YAxis/>
+                          <Tooltip/>
+                          <Bar
+                            dataKey="units"
+                            fill="#2775c7"
+                            radius={[5, 5, 0, 0]}
+                          />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    <p className="market-disclaimer">
+                      Product ranking by selected period.
+                      Daily historical sales series are not available
+                      in the current API response.
+                    </p>
+                  </>
+                )}
+              </section>
+
+}
+
+              {/* INVENTORY HEALTH */}
+              <section className="section-card">
+                <div className="section-heading">
+                  <div>
+                    <h2>{t.inventoryHealth}</h2>
+                    <p>{t.inventoryCoverage}</p>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="section-toggle"
+                    aria-label="Toggle inventory health"
+                    aria-expanded={sectionOpen.inventoryHealth}
+                    onClick={() => toggleSection('inventoryHealth')}
+                  >
+                    <ChevronRight
+                      size={20}
+                      style={{
+                        transform: sectionOpen.inventoryHealth
+                          ? 'rotate(90deg)'
+                          : 'rotate(0deg)',
+                        transition: 'transform 0.2s'
+                      }}
+                    />
+                  </button>
+                </div>
+
+                {sectionOpen.inventoryHealth && (
                   <div className="attention-grid">
                     <div>
                       <Warehouse/>
@@ -1287,19 +1411,19 @@ function App() {
                       <strong>{fmt(currentMeta.inventoryAlertCount)}</strong>
                     </div>
                   </div>
-                </section>
-              </>
-            )}
+                )}
+              </section>
+            </>
+          )}
 
           {/* PRODUCT CATALOG */}
-
           {activePage === 'catalog' && (
             <section className="section-card">
               <div className="section-heading">
                 <div>
                   <h2>{t.catalog}</h2>
                   <p>
-                    {fmt(currentMeta.catalogCount)} {t.products} · {market}
+                    {fmt(currentMeta.catalogCount)} {t.products} · US
                   </p>
                 </div>
 
@@ -1349,7 +1473,6 @@ function App() {
           )}
 
           {/* WATCHLIST */}
-
           {activePage === 'watchlist' && (
             <section className="section-card">
               <div className="section-heading">
@@ -1373,7 +1496,6 @@ function App() {
           )}
 
           {/* PRODUCT COMPARISON */}
-
           {activePage === 'compare' && (
             <ComparisonTable
               records={compareRecords}
@@ -1387,8 +1509,7 @@ function App() {
             />
           )}
 
-          {/* SYNC CENTER */}
-
+          {/* SYNC CENTER: US ONLY */}
           {(activePage === 'sync' || activePage === 'logs') && (
             <section className="section-card">
               <div className="section-heading">
@@ -1401,14 +1522,12 @@ function App() {
               </div>
 
               <div className="sync-grid">
-                {['US', 'AU'].map(code => {
+                {['US'].map(code => {
                   const status = statuses[code];
 
                   return (
                     <div className="sync-card" key={code}>
-                      <strong>
-                        {code} · {code === 'US' ? 'USD' : 'AUD'}
-                      </strong>
+                      <strong>US · USD</strong>
 
                       <span className={`status-pill ${
                         status?.status === 'success'
@@ -1435,7 +1554,6 @@ function App() {
           )}
 
           {/* SETTINGS */}
-
           {activePage === 'settings' && (
             <section className="section-card">
               <div className="section-heading">
