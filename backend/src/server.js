@@ -586,60 +586,61 @@ app.get('/{*splat}', (_req, res) => {
 // ==========================================
 
 cron.schedule(
-  config.cron,
-  async () => {
-    if (syncLock) {
-      console.log(
-        'Scheduled sync skipped: another sync is running'
-      );
+ 
+// ==========================================
+// SCHEDULED MULTI-MARKET SYNC
+// ==========================================
 
-      return;
-    }
+const scheduledSyncEnabled =
+  process.env.ENABLE_SCHEDULED_SYNC !== 'false';
 
-    console.log(
-      '[V4] Scheduled multi-market sync started'
-    );
-
-    try {
-      const result = await executeSync();
-
-      console.log(
-        '[V4] Scheduled sync result:',
-        JSON.stringify(result.summary)
-      );
-
-      if (result.summary?.failed > 0) {
-        console.error(
-          '[V4] Some markets failed synchronization'
+if (scheduledSyncEnabled) {
+  cron.schedule(
+    config.cron,
+    async () => {
+      if (syncLock) {
+        console.log(
+          'Scheduled sync skipped: another sync is running'
         );
+        return;
       }
 
-    } catch (error) {
-      console.error(
-        '[V4] Scheduled sync failed:',
-        error.message
+      console.log(
+        '[V4] Scheduled multi-market sync started'
       );
+
+      try {
+        const result = await executeSync();
+
+        console.log(
+          '[V4] Scheduled sync result:',
+          JSON.stringify(result.summary)
+        );
+
+        if (result.summary?.failed > 0) {
+          console.error(
+            '[V4] Some markets failed synchronization'
+          );
+        }
+      } catch (error) {
+        console.error(
+          '[V4] Scheduled sync failed:',
+          error.message
+        );
+      }
+    },
+    {
+      timezone: config.timezone
     }
-  },
-  {
-    timezone: config.timezone
-  }
-);
-
-// ==========================================
-// START SERVER
-// ==========================================
-
-app.listen(config.port, () => {
-  console.log(
-    `Keychron V4 Multi-Market API listening on ${config.port}`
   );
 
   console.log(
-    'Enabled markets: US/USD, AU/AUD'
+    `[V4] Scheduled sync enabled: ${config.cron}`
   );
-
+} else {
   console.log(
-    `Scheduled sync: ${config.cron} (${config.timezone})`
+    '[V4] Scheduled sync disabled by environment configuration'
   );
+}
+
 });
