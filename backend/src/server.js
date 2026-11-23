@@ -36,6 +36,12 @@ app.use(express.json({ limit: '100kb' }));
 const COOKIE = 'partner_session';
 const VALID_MARKETS = ['US', 'AU'];
 
+// Preview safety switch.
+// Set ENABLE_SCHEDULED_SYNC=false to disable
+// scheduled sync and all manual MCP operations.
+const scheduledSyncEnabled =
+  process.env.ENABLE_SCHEDULED_SYNC !== 'false';
+
 const hash = value =>
   crypto.createHash('sha256').update(value).digest('hex');
 
@@ -145,6 +151,14 @@ function getMarket(value, res) {
 let syncLock = false;
 
 async function executeSync(marketCode = null) {
+  if (!scheduledSyncEnabled) {
+    const error = new Error(
+      'Synchronization is disabled in this environment'
+    );
+    error.statusCode = 403;
+    throw error;
+  }
+
   if (syncLock) {
     const error = new Error('Sync already running');
     error.statusCode = 409;
@@ -193,11 +207,15 @@ app.get('/health', async (_req, res) => {
       ok: true,
       db: 'connected',
       version: '4.0.0',
-      markets: ['US', 'AU']
+      markets: ['US', 'AU'],
+      scheduledSyncEnabled
     });
 
   } catch (error) {
-    console.error('Health check failed:', error.message);
+    console.error(
+      'Health check failed:',
+      error.message
+    );
 
     res.status(503).json({
       ok: false,
@@ -271,7 +289,10 @@ app.post('/api/auth/login', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Login error:', error.message);
+    console.error(
+      'Login error:',
+      error.message
+    );
 
     res.status(500).json({
       error: 'Login service unavailable'
@@ -305,7 +326,10 @@ app.post('/api/auth/logout', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Logout error:', error.message);
+    console.error(
+      'Logout error:',
+      error.message
+    );
 
     res.status(500).json({
       error: 'Logout failed'
@@ -490,6 +514,12 @@ app.get(
   '/api/admin/mcp-tools',
   admin,
   async (_req, res) => {
+    if (!scheduledSyncEnabled) {
+      return res.status(403).json({
+        error: 'MCP operations are disabled in this environment'
+      });
+    }
+
     try {
       res.json({
         tools: await inspectMcp()
@@ -521,6 +551,13 @@ app.post(
   '/api/admin/sync',
   admin,
   async (req, res) => {
+    if (!scheduledSyncEnabled) {
+      return res.status(403).json({
+        ok: false,
+        error: 'Synchronization is disabled in this environment'
+      });
+    }
+
     try {
       const requestedMarket = req.body?.market;
 
@@ -585,15 +622,6 @@ app.get('/{*splat}', (_req, res) => {
 // SCHEDULED MULTI-MARKET SYNC
 // ==========================================
 
-cron.schedule(
- 
-// ==========================================
-// SCHEDULED MULTI-MARKET SYNC
-// ==========================================
-
-const scheduledSyncEnabled =
-  process.env.ENABLE_SCHEDULED_SYNC !== 'false';
-
 if (scheduledSyncEnabled) {
   cron.schedule(
     config.cron,
@@ -602,6 +630,7 @@ if (scheduledSyncEnabled) {
         console.log(
           'Scheduled sync skipped: another sync is running'
         );
+
         return;
       }
 
@@ -622,6 +651,7 @@ if (scheduledSyncEnabled) {
             '[V4] Some markets failed synchronization'
           );
         }
+
       } catch (error) {
         console.error(
           '[V4] Scheduled sync failed:',
@@ -637,10 +667,29 @@ if (scheduledSyncEnabled) {
   console.log(
     `[V4] Scheduled sync enabled: ${config.cron}`
   );
+
 } else {
   console.log(
     '[V4] Scheduled sync disabled by environment configuration'
   );
 }
 
+// ==========================================
+// START SERVER
+// ==========================================
+
+app.listen(config.port, () => {
+  console.log(
+    `Keychron V4 Multi-Market API listening on ${config.port}`
+  );
+
+  console.log(
+    'Enabled markets: US/USD, AU/AUD'
+  );
+
+  console.log(
+    scheduledSyncEnabled
+      ? `Scheduled sync: ${config.cron} (${config.timezone})`
+      : 'Scheduled sync: DISABLED'
+  );
 });
