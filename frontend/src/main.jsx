@@ -13,6 +13,8 @@ import {
   ResponsiveContainer, CartesianGrid
 } from 'recharts';
 import './style.css';
+import './BestSellerRanking.css';
+import BestSellerRanking from './BestSellerRanking.jsx';
 
 const WATCH_KEY = 'keychron-v42-watchlist';
 const LANG_KEY = 'dash-lang';
@@ -774,7 +776,7 @@ function App() {
     }
 
     if (
-      ['catalog', 'watchlist', 'compare'].includes(page) &&
+      ['catalog', 'watchlist', 'compare', 'ranking'].includes(page) &&
       market === 'GLOBAL'
     ) {
       setMarket('US');
@@ -847,7 +849,12 @@ function App() {
       items: [
         { id: 'catalog', label: t.catalog, icon: Package },
         { id: 'watchlist', label: t.watchlist, icon: Star },
-        { id: 'compare', label: t.compare, icon: GitCompare }
+        { id: 'compare', label: t.compare, icon: GitCompare },
+        {
+          id: 'ranking',
+          label: lang === 'zh' ? '畅销排行榜' : 'Best-seller Ranking',
+          icon: BarChart3
+        }
       ]
     },
     {
@@ -1059,6 +1066,14 @@ function App() {
                 <X size={15}/>
               </button>
             </div>
+          )}
+
+          {/* BEST-SELLER RANKING: US FOUR-STORE CONSOLIDATED */}
+          {activePage === 'ranking' && market === 'US' && (
+            <BestSellerRanking
+              items={currentDashboard?.skuItems || []}
+              lang={lang}
+            />
           )}
 
           {/* GLOBAL OVERVIEW: US ONLY */}
@@ -1361,8 +1376,6 @@ function App() {
                   </>
                 )}
               </section>
-
-}
 
               {/* INVENTORY HEALTH */}
               <section className="section-card">
