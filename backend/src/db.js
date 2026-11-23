@@ -298,6 +298,7 @@ export async function replaceRunData(
       for (const item of rows) {
         const asin = normalizeAsin(item.asin);
         const msku = clean(item.msku);
+
         const identityKey = `${asin}|${msku}`;
 
         await client.query(`
@@ -554,8 +555,65 @@ export async function getDashboard(marketCode = 'US') {
   `, [marketCode]);
 
   const products = new Map();
+  const skuItemsMap = new Map();
   const skuToAsin = new Map();
   const localSkuToAsin = new Map();
+
+  // SKU identity is ASIN + normalized Seller SKU.
+  // This consolidates the same SKU across stores while
+  // keeping distinct ASIN relationships separate.
+  const getSkuKey = (asin, sellerSku) =>
+    `${normalizeAsin(asin)}|${normalizeSku(sellerSku)}`;
+
+  const ensureSkuItem = (asin, sellerSku, source = {}) => {
+    const cleanAsin = normalizeAsin(asin);
+    const cleanSellerSku = clean(sellerSku);
+
+    if (!cleanAsin || !cleanSellerSku || isGhostSku(cleanSellerSku)) {
+      return null;
+    }
+
+    const key = getSkuKey(cleanAsin, cleanSellerSku);
+    let skuItem = skuItemsMap.get(key);
+
+    if (!skuItem) {
+      skuItem = {
+        id: key,
+        asin: cleanAsin,
+        sellerSku: cleanSellerSku,
+        sku: cleanSellerSku,
+        title: validTitle(source.title),
+        imageUrl: source.imageUrl || null,
+        category: source.category || 'Other',
+        sales7: 0,
+        previousSales7: 0,
+        sales30: 0,
+        previousSales30: 0,
+        sales90: 0,
+        previousSales90: 0,
+        rank: null,
+        previousRank: null,
+        rankChange: null
+      };
+
+      skuItemsMap.set(key, skuItem);
+
+    } else {
+      if (!skuItem.title && validTitle(source.title)) {
+        skuItem.title = validTitle(source.title);
+      }
+
+      if (!skuItem.imageUrl && source.imageUrl) {
+        skuItem.imageUrl = source.imageUrl;
+      }
+
+      if ((!skuItem.category || skuItem.category === 'Other') && source.category) {
+        skuItem.category = source.category;
+      }
+    }
+
+    return skuItem;
+  };
 
   for (const row of catalog.rows) {
     const asin = normalizeAsin(row.asin);
@@ -565,6 +623,7 @@ export async function getDashboard(marketCode = 'US') {
 
     const key = `ASIN:${asin}`;
     const msku = clean(row.msku);
+
     const localSku = clean(row.local_sku);
 
     let item = products.get(key);
@@ -616,17 +675,23 @@ export async function getDashboard(marketCode = 'US') {
       item.category = row.category;
     }
 
-    // Keep all SKU mappings internally.
-    // Ghost SKUs are filtered only from the returned display fields.
     if (msku && !item.sellerSkus.includes(msku)) {
       item.sellerSkus.push(msku);
+    }
+
+    // Keep zero-sales SKUs from the catalog.
+    if (msku && !isGhostSku(msku)) {
+      ensureSkuItem(asin, msku, {
+        title: row.title,
+        imageUrl: row.image_url,
+        category: row.category
+      });
     }
 
     if (localSku && !item.localSkus.includes(localSku)) {
       item.localSkus.push(localSku);
     }
 
-    // Prefer a normal Seller SKU as the primary displayed SKU.
     if (msku && !isGhostSku(msku)) {
       if (!item.sku || isGhostSku(item.sku)) {
         item.sku = msku;
@@ -645,7 +710,6 @@ export async function getDashboard(marketCode = 'US') {
       item.lastSeenRunIds.push(String(row.last_seen_run_id));
     }
 
-    // Ghost SKU mappings remain available for internal matching.
     if (msku) {
       skuToAsin.set(
         `${shopId}|${normalizeSku(msku)}`,
@@ -695,6 +759,28 @@ export async function getDashboard(marketCode = 'US') {
     const units = number(row.units);
     const previous = number(row.previous_units);
 
+    // Consolidate the same SKU across all shops.
+    if (sellerSku && !isGhostSku(sellerSku)) {
+      const skuItem = ensureSkuItem(asin, sellerSku, {
+        title: item.title,
+        imageUrl: item.imageUrl,
+        category: item.category
+      });
+
+      if (skuItem) {
+        if (period === 7) {
+          skuItem.sales7 += units;
+          skuItem.previousSales7 += previous;
+        } else if (period === 30) {
+          skuItem.sales30 += units;
+          skuItem.previousSales30 += previous;
+        } else if (period === 90) {
+          skuItem.sales90 += units;
+          skuItem.previousSales90 += previous;
+        }
+      }
+    }
+
     if (period === 7) {
       item.sales7 += units;
       item.previousSales7 += previous;
@@ -706,8 +792,6 @@ export async function getDashboard(marketCode = 'US') {
       item.previousSales90 += previous;
     }
 
-    // Do not expose Ghost SKU to the partner.
-    // Keep it internally available through skuToAsin.
     if (
       sellerSku &&
       !isGhostSku(sellerSku) &&
@@ -839,7 +923,6 @@ export async function getDashboard(marketCode = 'US') {
       sku: item.sku,
       localSku: item.localSku,
 
-      // Final display filtering.
       sellerSkus: [...new Set(item.sellerSkus)]
         .filter(sku => !isGhostSku(sku)),
 
@@ -915,6 +998,51 @@ export async function getDashboard(marketCode = 'US') {
   });
 
   // --------------------------------------
+  // SKU RANKING
+  // --------------------------------------
+
+  const skuItems = [...skuItemsMap.values()];
+
+  skuItems.sort((a, b) => b.sales30 - a.sales30);
+
+  skuItems.forEach((item, index) => {
+    item.rank = index + 1;
+  });
+
+  const previousSkuRanked = [...skuItems].sort(
+    (a, b) => b.previousSales30 - a.previousSales30
+  );
+
+  const previousSkuRankMap = new Map(
+    previousSkuRanked.map((item, index) => [
+      item.id,
+      index + 1
+    ])
+  );
+
+  skuItems.forEach(item => {
+    item.previousRank = previousSkuRankMap.get(item.id) ?? null;
+    item.rankChange = item.previousRank == null
+      ? null
+      : item.previousRank - item.rank;
+
+    item.salesGrowth7 = growthRate(
+      item.sales7,
+      item.previousSales7
+    );
+
+    item.salesGrowth30 = growthRate(
+      item.sales30,
+      item.previousSales30
+    );
+
+    item.salesGrowth90 = growthRate(
+      item.sales90,
+      item.previousSales90
+    );
+  });
+
+  // --------------------------------------
   // MARKET SUMMARY
   // --------------------------------------
 
@@ -941,7 +1069,13 @@ export async function getDashboard(marketCode = 'US') {
       catalogCount: items.length,
       listingCount: catalog.rowCount,
 
+      skuCount: skuItems.length,
+
       zeroSalesCount: items.filter(
+        item => item.sales7 === 0 && item.sales30 === 0
+      ).length,
+
+      zeroSalesSkuCount: skuItems.filter(
         item => item.sales7 === 0 && item.sales30 === 0
       ).length,
 
@@ -979,9 +1113,14 @@ export async function getDashboard(marketCode = 'US') {
       rankingDefinition:
         'Internal market-wide ASIN sales ranking; not Amazon Best Sellers Rank',
 
+      skuRankingDefinition:
+        'Internal market-wide Seller SKU sales ranking consolidated across all shops; not Amazon Best Sellers Rank',
+
       runMetrics: run.metrics
     },
-    items
+
+    items,
+    skuItems
   };
 }
 
@@ -1013,6 +1152,7 @@ export async function getGlobalOverview() {
           reservedStock: 0
         }
       };
+
       continue;
     }
 
