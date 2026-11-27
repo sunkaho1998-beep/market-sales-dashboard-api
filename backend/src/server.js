@@ -20,7 +20,7 @@ import {
 
 import { runFullSync } from './sync.js';
 import { inspectMcp } from './mcp.js';
-
+import { createRankingRouter } from './ranking.js';
 // ==========================================
 // INITIALIZATION
 // ==========================================
@@ -387,7 +387,18 @@ app.get(
     }
   }
 );
+// ==========================================
+// BEST-SELLER RANKING API
+// ==========================================
 
+app.use(
+  '/api/partner/ranking',
+  createRankingRouter({
+    partner,
+    getDashboard,
+    latestRun
+  })
+);
 // ==========================================
 // GLOBAL OVERVIEW
 // ==========================================
